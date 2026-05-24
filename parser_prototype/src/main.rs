@@ -286,10 +286,27 @@ impl Parser {
     }
 
     // ── Type ────────────────────────────────────────────────────────────
-    // BaseType = "i32" | "f64" | "str" | "bool" | "void" | IDENT
-    // Type     = BaseType | "[" BaseType "]"
+    // BaseType   = "i32" | "f64" | "str" | "bool" | "void" | IDENT
+    // Type       = BaseType | "[" BaseType "]" | "(" Type { "," Type } ")"
+    // ReturnType = Type | "(" Type { "," Type } ")"
 
     fn parse_type(&mut self) -> Result<(), ParseError> {
+        if self.match_kw(TokenKind::LParen) {
+            self.parse_type_inner()?;
+            while self.match_kw(TokenKind::Comma) {
+                self.parse_type_inner()?;
+            }
+            self.expect_kw(TokenKind::RParen)?;
+        } else if self.match_kw(TokenKind::LBracket) {
+            self.parse_basetype()?;
+            self.expect_kw(TokenKind::RBracket)?;
+        } else {
+            self.parse_basetype()?;
+        }
+        Ok(())
+    }
+
+    fn parse_type_inner(&mut self) -> Result<(), ParseError> {
         if self.match_kw(TokenKind::LBracket) {
             self.parse_basetype()?;
             self.expect_kw(TokenKind::RBracket)?;
@@ -493,13 +510,29 @@ impl Parser {
     }
 
     fn parse_var_decl(&mut self) -> Result<(), ParseError> {
+        // VarDecl = "var" VarBinding { "," VarBinding } "=" Expr ";"
         self.expect_kw(TokenKind::Var)?;
-        self.expect(TokenKind::Ident("".into()))?;
-        self.expect_kw(TokenKind::Colon)?;
-        self.parse_type()?;
+        self.parse_var_binding()?;
+        while self.match_kw(TokenKind::Comma) {
+            self.parse_var_binding()?;
+        }
         self.expect_kw(TokenKind::Assign)?;
         self.parse_expr()?;
         self.expect_kw(TokenKind::Semi)?;
+        Ok(())
+    }
+
+    fn parse_var_binding(&mut self) -> Result<(), ParseError> {
+        // VarBinding = IDENT ":" Type  |  "_"
+        let id = self.expect(TokenKind::Ident("".into()))?;
+        // Check if this is the discard "_" (no type annotation)
+        if let TokenKind::Ident(ref name) = id.kind {
+            if name == "_" {
+                return Ok(());
+            }
+        }
+        self.expect_kw(TokenKind::Colon)?;
+        self.parse_type()?;
         Ok(())
     }
 
@@ -542,11 +575,15 @@ impl Parser {
     }
 
     fn parse_return_stmt(&mut self) -> Result<(), ParseError> {
+        // ReturnStmt = "return" [ Expr { "," Expr } ] ";"
         self.expect_kw(TokenKind::Return)?;
         if self.peek_kind() == &TokenKind::Semi {
             self.advance();
         } else {
             self.parse_expr()?;
+            while self.match_kw(TokenKind::Comma) {
+                self.parse_expr()?;
+            }
             self.expect_kw(TokenKind::Semi)?;
         }
         Ok(())

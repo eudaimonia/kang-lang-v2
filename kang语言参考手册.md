@@ -60,14 +60,16 @@ struct Empty {}  // 不推荐
 
 | 函数 | 方向 | 示例 |
 |------|------|------|
-| `str(n: i32)` | i32 → str | `str(42)` → `"42"` |
-| `str(n: f64)` | f64 → str | `str(3.14)` → `"3.14"` |
-| `str(b: bool)` | bool → str | `str(true)` → `"true"` |
-| `i32(s: str)` | str → i32 | `i32("42")` → `42` |
-| `f64(s: str)` | str → f64 | `f64("3.14")` → `3.14` |
-| `bool(s: str)` | str → bool | `bool("true")` → `true` |
-| `i32(n: f64)` | f64 → i32 | `i32(3.14)` → `3` (向零截断) |
-| `f64(n: i32)` | i32 → f64 | `f64(42)` → `42.0` (无损) |
+| `str(n: i32) -> str` | i32 → str | `str(42)` → `"42"` |
+| `str(n: f64) -> str` | f64 → str | `str(3.14)` → `"3.14"` |
+| `str(b: bool) -> str` | bool → str | `str(true)` → `"true"` |
+| `i32(s: str) -> (i32, bool)` | str → i32 | `i32("42")` → `(42, true)` |
+| `f64(s: str) -> (f64, bool)` | str → f64 | `f64("3.14")` → `(3.14, true)` |
+| `bool(s: str) -> (bool, bool)` | str → bool | `bool("true")` → `(true, true)` |
+| `i32(n: f64) -> i32` | f64 → i32 | `i32(3.14)` → `3` (向零截断) |
+| `f64(n: i32) -> f64` | i32 → f64 | `f64(42)` → `42.0` (无损) |
+
+str→值 的三个转换函数返回 `(T, bool)`，第二个值为 `false` 表示转换失败。
 
 唯一的隐式转换例外: `+` 运算符任一侧为 `str` 时，另一侧自动转为字符串拼接。
 
@@ -90,13 +92,17 @@ var t:str = 1 + " is " + true;  // → "1 is true"
 ### 变量声明
 
 ```kang
-// 必须显式类型标注，必须初始化
+// 单变量: 必须显式类型标注，必须初始化
 var name:type = expr;
 
 var x:i32 = 0;
 var pi:f64 = 3.14159;
 var greeting:str = "hello";
 var flag:bool = true;
+
+// 多接收: 解包多返回函数
+var val:i32, ok:bool = i32("42");     // val=42, ok=true
+var val:i32, _ = i32("abc");          // 只取第一个, _ 丢弃第二个
 ```
 
 ### 赋值
@@ -131,9 +137,29 @@ def answer() -> i32 {
 }
 ```
 
+**多返回值**:
+```kang
+// 返回类型用括号包裹多个类型
+def divide(a:i32, b:i32) -> (i32, i32) {
+    var q:i32 = a / b;
+    var r:i32 = a - q * b;
+    return q, r;
+}
+
+// 调用方: 多接收解包
+var quot:i32, rem:i32 = divide(10, 3);  // quot=3, rem=1
+
+// 单接收取第一个值 (其余丢弃)
+var q:i32 = divide(10, 3);              // q=3
+
+// _ 占位丢弃
+var _, rem:i32 = divide(10, 3);         // 只取余数
+var q:i32, _ = divide(10, 3);           // 只取商
+```
+
 **规则**:
 - 所有参数和返回值必须显式标注类型
-- 非 void 函数的所有代码路径必须 return
+- 非 void 函数的所有代码路径必须 return，返回值数量/类型必须匹配
 - 函数名与变量名共享命名空间，不可重名
 - 不支持用户自定义函数重载（仅内置函数可重载）
 
@@ -303,8 +329,8 @@ var r4:bool = (1 > 0) && (2 < 3); // → true
 
 | 函数 | 说明 |
 |------|------|
-| `read_line() -> str` | 从 stdin 读一行 (不含换行) |
-| `read_file(path: str) -> str` | 读取文件全部内容 |
+| `read_file(path: str) -> (str, bool)` | 读取文件内容，bool=false 表示失败 |
+| `read_line() -> (str, bool)` | 从 stdin 读一行，bool=false 表示失败 |
 
 ### 写入
 
@@ -318,7 +344,7 @@ var r4:bool = (1 > 0) && (2 < 3); // → true
 | 函数 | 说明 |
 |------|------|
 | `file_exists(path: str) -> bool` | 文件是否存在 |
-| `file_size(path: str) -> i32` | 文件字节数 |
+| `file_size(path: str) -> (i32, bool)` | 文件字节数，bool=false 表示失败 |
 
 ### 数组
 
@@ -328,15 +354,27 @@ var r4:bool = (1 > 0) && (2 < 3); // → true
 | `len(s: str) -> i32` | 字符串长度 (字符数) |
 | `push(arr: [T], elem: T)` | 在数组末尾追加元素 |
 
-### 错误处理
+### 多返回值与错误处理
 
-以上 I/O 函数通过返回值哨兵表示错误:
-- `str` 返回值: 空串 `""` = 错误
-- `bool` 返回值: `false` = 错误
-- `i32` 返回值: `-1` = 错误
-- `f64` 返回值: `f64(s: str)` 转换失败哨兵待定 (数值互转 `f64(n: i32)` 无损、`i32(n: f64)` 遇 NaN/Inf 则 panic)
+输入/查询/str转换 函数返回 `(value, bool)`，第二个值为 `false` 表示操作失败。调用方通过多接收解包检查：
 
-**注意**: 哨兵值可能与合法返回值重叠 (如空文件 → `""`)，v1 接受此限制。
+```kang
+// 显式错误检查
+var content:str, ok:bool = read_file("config.kang");
+if ok then {
+    puts(content);
+} else {
+    eprint("failed to read file");
+}
+
+// 忽略错误 (单接收取第一值)
+var content:str = read_file("config.kang");  // 失败时 content=""
+
+// 只检查成败
+var _, ok:bool = read_file("config.kang");
+```
+
+`f64(n: i32)` 和 `str()` 系列永不失败。`i32(n: f64)` NaN/Inf 时 panic。
 
 ---
 
@@ -421,18 +459,23 @@ def lex(source:str) -> [Token] {
 }
 ```
 
-### 哨兵错误检查
+### 多返回值错误检查
 
 ```kang
 def safe_read(path:str) -> void {
-    var content:str = read_file(path);
-    // 空串可能是空文件也可能是错误; v1 不做区分
-    if content == "" then {
-        eprint("warning: empty or missing file: " + path);
-        // 不知道是真的空文件还是读取失败
+    var content:str, ok:bool = read_file(path);
+    if ok then {
+        puts(content);
+    } else {
+        eprint("failed to read: " + path);
     }
-    puts(content);
     return;
+}
+
+// 单接收取第一值 (不检查错误，适合原型代码)
+def quick_read(path:str) -> str {
+    var content:str = read_file(path);
+    return content;
 }
 ```
 
@@ -462,9 +505,8 @@ def move_right(p:Point, dx:f64) -> Point {
 8. **禁止嵌套数组**: `[[i32]]` 不合法，嵌套结构需用结构体包装
 9. **i32/f64 不可混用**: `1 + 2.0` 是编译错误
 10. **i32 除法向零截断**: `-7 / 2` → `-3`，非向下取整
-11. **哨兵错误可能漏检**: 空文件、false 布尔值、-1 整数与错误值重叠
+11. **多返回类型不可作为变量类型**: `(i32, bool)` 仅用于函数返回，不能 `var x:(i32,bool) = f()`
 12. **函数不支持重载**: 每个函数名在作用域内唯一 (内置函数除外)
-13. **f64(s: str) 错误哨兵未定义**: 规格待定。`f64(n: i32)` 无损、`i32(n: f64)` NaN/Inf 则 panic
 
 ---
 
@@ -481,4 +523,5 @@ def move_right(p:Point, dx:f64) -> Point {
 | `printf` | `puts` / `print` / `eprint` |
 | `malloc/free` | 无 (Arena 自动管理) |
 | undefined behavior | **零 UB**: panic 或 wrapping |
+| 错误处理哨兵 | 多返回值 `(T, bool)` |
 | 隐式类型转换 | 禁止 (除 str +) |

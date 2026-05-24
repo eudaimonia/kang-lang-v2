@@ -1,0 +1,48 @@
+// 多返回值测试
+// 覆盖: ReturnType, 多返回, 多接收 var, _ discard
+
+// 多返回函数
+def divide(a:i32, b:i32) -> (i32, i32) {
+    var q:i32 = a / b;
+    var r:i32 = a - q * b;
+    return q, r;
+}
+
+// 多接收解包
+def test_unpack() -> void {
+    var q:i32, r:i32 = divide(10, 3);
+    puts("q=" + str(q) + " r=" + str(r));
+    return;
+}
+
+// 单接收取第一值
+def test_single_receive() -> void {
+    var q:i32 = divide(10, 3);
+    puts("q=" + str(q));
+    return;
+}
+
+// _ 丢弃
+def test_discard() -> void {
+    var q:i32, _ = divide(10, 3);
+    var _, r:i32 = divide(10, 3);
+    puts("q=" + str(q) + " r=" + str(r));
+    return;
+}
+
+// 多返回值用作参数 (取第一值)
+def test_as_arg() -> void {
+    var s:str = str(divide(10, 3));  // 取第一个返回值 3 → "3"
+    puts(s);
+    return;
+}
+
+// void 函数仍正常
+def test_void() -> void {
+    return;
+}
+
+// 单返回值不变
+def add(a:i32, b:i32) -> i32 {
+    return a + b;
+}

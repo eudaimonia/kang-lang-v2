@@ -29,7 +29,8 @@ TopLevel       = StructDef | FuncDef ;
 BaseType       = "i32" | "f64" | "str" | "bool" | "void" | IDENT ;
 
 Type           = BaseType
-               | "[" BaseType "]" ;          (* 数组元素非数组, 禁止 [[T]] *)
+               | "[" BaseType "]"            (* 数组元素非数组, 禁止 [[T]] *)
+               | "(" Type { "," Type } ")" ;  (* 多返回类型, 仅用于函数返回 *)
 
 (* ========================================================================
  * 3. 结构体定义 (仅限顶层)
@@ -43,7 +44,9 @@ Field          = IDENT ":" Type ";" ;
  * 4. 函数定义
  * ======================================================================== *)
 
-FuncDef        = "def" IDENT "(" [ Params ] ")" "->" Type Block ;
+ReturnType     = Type | "(" Type { "," Type } ")" ;  (* 多返回需括号 *)
+
+FuncDef        = "def" IDENT "(" [ Params ] ")" "->" ReturnType Block ;
 
 Params         = Param { "," Param } ;
 
@@ -64,7 +67,10 @@ Stmt           = VarDecl
                | Block
                ;
 
-VarDecl        = "var" IDENT ":" Type "=" Expr ";" ;
+VarBinding     = IDENT ":" Type        (* 具名绑定 *)
+               | "_" ;                  (* discard, 无需类型标注 *)
+
+VarDecl        = "var" VarBinding { "," VarBinding } "=" Expr ";" ;
 
 AssignStmt     = LValue "=" Expr ";" ;
 
@@ -73,9 +79,8 @@ LValue         = IDENT
                | Expr "." IDENT              (* 结构体字段 *)
                ;
 
-ReturnStmt     = "return" Expr ";"
-               | "return" ";"                (* void 函数专用 *)
-               ;
+ReturnStmt     = "return" [ Expr { "," Expr } ] ";" ;
+               (* void: return;  单值: return e;  多值: return e1, e2; *)
 
 IfStmt         = "if" Expr "then" Stmt [ "else" Stmt ] ;
 
@@ -183,6 +188,9 @@ Args           = Expr { "," Expr } ;
  *   - 结构体全字段初始化: StructLit 语法允许零字段, 语义层要求逐字段赋值
  *   - 非 void 函数所有路径 return: 语法不保证, 语义层做控制流分析
  *   - 函数重载: 语法允许同名 FuncDef, 语义层拒绝用户自定义函数重名
+ *   - 多返回类型匹配: 语法不约束返回值数量, 语义层检查 return 值与声明一致
+ *   - var 多接收数量匹配: 语法不约束, 语义层检查接收变量数与返回值数一致
+ *   - "_" discard: IDENT 包含 "_", 语义层在多接收 var 中不绑定 "_" 为真实变量
  *
  * ========================================================================
  * 10. 词法 (供参考, 由 logos 实现)

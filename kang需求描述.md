@@ -15,6 +15,7 @@
 **复合类型**
 - `[T]`：数组，元素类型 T 可以是 i32/f64/str/bool/结构体，禁止 `[void]`
 - 结构体：`struct Name { field:Type; ... }`，值类型
+- 多返回类型：`(T1, T2, ...)` 仅用于函数返回类型，不可作为变量类型或结构体字段
   - 字段类型禁止 `void`
   - 禁止直接或间接自引用（`struct Node { next: Node }`），仅允许通过数组间接引用（`struct Node { children: [Node] }`）
 
@@ -46,10 +47,11 @@
 
 **语句**
 - 块：`{ }` 包裹多条语句，用分号 `;` 分隔或换行
-- 函数：`def name(param:type) -> type { body }`
-- 变量：`var name:type = expr;`（必须初始化）
-- 返回：`return expr;`（非 void 函数）、`return;`（void 函数）
-- 非 void 函数所有代码路径必须显式 return，否则编译错误
+- 函数：`def name(params) -> (T1, T2) { body }`，单返回可省略括号
+- 变量（单接收）：`var name:type = expr;`（必须初始化）
+- 变量（多接收）：`var n1:T1, n2:T2 = expr;`，`_` 站位丢弃某个值
+- 返回：`return expr, expr;`（多返回）、`return expr;`（单返回）、`return;`（void）
+- 非 void 函数所有代码路径必须显式 return，返回值的数量/类型必须匹配声明
 - 赋值：`lvalue = expr;`（lvalue 为变量名、`arr[i]`、`obj.field`；str 不可变，`s[i]` 禁止作为左值）
 - 分支：`if cond then ... else ...`（条件必须是 bool，else 可选）
 - 循环：`for var name:type = init, cond, step in { body }`
@@ -71,6 +73,7 @@
 - 函数名和变量名共享命名空间，同名冲突 → 编译错误
 - 函数参数在函数体内不可被 `var` 重新声明
 - 内层块变量可遮蔽外层同名变量
+- `_` 为 discard 标识符，仅用于多接收 var 中占位，不绑定变量
 
 **作用域**
 - 词法作用域
@@ -87,20 +90,21 @@
 - 长度：`len(s)` — 返回字符串长度或数组长度（按参数类型重载）
 - 数组：`push(arr, elem)` — 向数组末尾追加元素
 - 输出：`puts(s)`、`print(s)`、`eprint(s)`（stderr）
-- 输入：`read_file(path)`、`read_line()`
+- 输入（多返回值，第二个值为成功标记）：
+  - `read_file(path) -> (str, bool)` — 读取文件，bool 为 false 表示失败
+  - `read_line() -> (str, bool)` — 读取一行
 - 写入：`write_file(path, content)`、`append_file(path, content)`
-- 查询：`file_exists(path) -> bool`、`file_size(path) -> i32`
+- 查询：`file_exists(path) -> bool`、`file_size(path) -> (i32, bool)`
 - 转换（按参数类型重载区分）：
-  - `str(n: i32)` — 整数转字符串
-  - `str(n: f64)` — 浮点转字符串
-  - `str(b: bool)` — 布尔转字符串
-  - `i32(s: str)` — 字符串转整数
-  - `f64(s: str)` — 字符串转浮点
-  - `bool(s: str)` — 字符串转布尔
-  - `i32(n: f64)` — 浮点转整数（向零截断，NaN/Inf → panic）
-  - `f64(n: i32)` — 整数转浮点（无损）
+  - `str(n: i32) -> str` — 整数转字符串
+  - `str(n: f64) -> str` — 浮点转字符串
+  - `str(b: bool) -> str` — 布尔转字符串
+  - `i32(s: str) -> (i32, bool)` — 字符串转整数，失败时 bool 为 false
+  - `f64(s: str) -> (f64, bool)` — 字符串转浮点，失败时 bool 为 false
+  - `bool(s: str) -> (bool, bool)` — 字符串转布尔，失败时第二个 bool 为 false
+  - `i32(n: f64) -> i32` — 浮点转整数（向零截断，NaN/Inf → panic）
+  - `f64(n: i32) -> f64` — 整数转浮点（无损）
 - 函数重载：仅内置函数支持按参数类型重载，用户自定义函数不支持
-- 错误处理用返回值哨兵（空串/false/-1）。哨兵可能与合法值重叠（如空文件返回空串），v1 接受此限制
 
 ### 运行时安全
 所有行为必须有确定结果，杜绝未定义行为：
