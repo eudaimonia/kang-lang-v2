@@ -13,8 +13,10 @@
 - `void`：无返回值
 
 **复合类型**
-- `[T]`：数组，连续存储，元素类型 T 无限制（支持基本类型和结构体）
-- 结构体：`struct Name { field:Type; ... }`，值类型，可包含自身类型字段的数组（如 `[ASTNode]`）
+- `[T]`：数组，元素类型 T 可以是 i32/f64/str/bool/结构体，禁止 `[void]`
+- 结构体：`struct Name { field:Type; ... }`，值类型
+  - 字段类型禁止 `void`
+  - 禁止直接或间接自引用（`struct Node { next: Node }`），仅允许通过数组间接引用（`struct Node { children: [Node] }`）
 
 **默认值**
 每种类型有确定的零值，杜绝未定义行为：
@@ -34,7 +36,7 @@
 **字面量**
 - 整数：`42`、`-1`
 - 浮点：`3.14`、`-1.0`
-- 字符串：`"hello"`（双引号包裹）
+- 字符串：`"hello"`（双引号包裹），支持转义 `\n` `\t` `\\` `\"` `\0`
 - 布尔：`true`、`false`
 - 数组：`[elem0, elem1, ...]`
 
@@ -49,12 +51,14 @@
 - 返回：`return expr;` 终止函数并返回值
 - 赋值：`lvalue = expr;`（lvalue 为变量名、`arr[i]`、`obj.field`）
 - 分支：`if cond then ... else ...`（条件必须是 bool，else 可选）
-- 循环：`for var = init, cond, step in { body }`
+- 循环：`for var name:type = init, cond, step in { body }`
+  - 循环变量在循环体内作用域有效，循环结束后不可访问
   - `init` 在循环前求值
   - `cond` 每次迭代前求值，必须是 bool，`false` 时退出
   - `step` 每次迭代后执行（赋值语句）
-- 结构体定义：`struct Name { field:Type; ... }`
+- 结构体定义（仅限顶层）：`struct Name { field:Type; ... }`
 - 结构体构造：`Name{field: expr, ...}`
+- 函数调用语句：`name(args);`（用于 `-> void` 函数，忽略返回值也可）
 
 **表达式**
 - 字面量 | 变量引用 | 二元运算 | 一元 `-expr`
@@ -89,6 +93,11 @@
   - `bool(s: str)` — 字符串转布尔
 - 函数重载：仅内置函数支持按参数类型重载，用户自定义函数不支持
 - 错误处理用返回值哨兵（空串/false/-1）。哨兵可能与合法值重叠（如空文件返回空串），v1 接受此限制
+
+### 运行时安全
+以下行为触发运行时 panic（立即终止并输出错误信息），杜绝未定义行为：
+- 数组/字符串索引越界（`i < 0` 或 `i >= len(a)`）
+- 整数除零（`x / 0`）
 
 ### 内存管理
 全局 Arena，程序退出统一回收，用户无感知。
