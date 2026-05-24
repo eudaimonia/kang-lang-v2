@@ -78,4 +78,4 @@
 - 词法分析：logos
 - 错误报告：ariadne
 - 架构：词法→语法→语义→代码生成 四阶段，REPL 和 AOT 复用前三阶段
-- 运行时：独立 Rust 库，函数前缀 `k_`，编译为 `libkangrt.a`
+- 运行时：独立 Rust 库，函数前缀 `k_`，静态链接 musl libc，编译为 `libkangrt.a`
