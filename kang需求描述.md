@@ -11,10 +11,32 @@
 - 所有变量和函数参数必须显式标注类型，禁止隐式转换
 
 ### 语法
-- 函数：`def name(param:type) -> type body`
-- 变量：`var name:type = expr`（必须初始化）
-- 分支：`if cond then ... else ...`（条件必须是 bool）
-- 循环：`for var = start, cond, step in body`
+
+**字面量**
+- 数字：`42`、`3.14`、`-1.0`
+- 字符串：`"hello"`（双引号包裹）
+- 布尔：`true`、`false`
+
+**注释**
+- 行注释：`// 注释内容`
+- 块注释：`/* 注释内容 */`
+
+**语句**
+- 块：`{ }` 包裹多条语句，用分号 `;` 分隔或换行
+- 函数：`def name(param:type) -> type { body }`
+- 变量：`var name:type = expr;`（必须初始化）
+- 返回：`return expr;` 终止函数并返回值
+- 分支：`if cond then ... else ...`（条件必须是 bool，else 可选）
+- 循环：`for var = init, cond, step in { body }`
+  - `init` 在循环前求值
+  - `cond` 每次迭代前求值，必须是 bool，`false` 时退出
+  - `step` 每次迭代后执行（赋值语句）
+
+**表达式**
+- 字面量 | 变量引用 | 二元运算 | 函数调用 `name(args)` | 分组 `(expr)`
+
+**作用域**
+- 词法作用域，内层块可遮蔽外层变量
 
 ### 运算符
 - 数值：`+ - * / < <= > >=`（num 之间）
