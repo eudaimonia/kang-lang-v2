@@ -1,0 +1,59 @@
+// 函数定义违规 — 语义层应拒绝
+// 覆盖: 非void缺return, void带return expr, 用户重载, 参数数不匹配, 参数类型不匹配
+
+// ── 非 void 函数缺少 return ──────────────────────────────
+
+// ERROR: 非 void 函数的路径缺少 return
+def bad_missing_return(x:i32) -> i32 {
+    if x > 0 then {
+        return 1;
+    } else {
+        puts("no return here");
+    }
+}
+
+// ── void 函数 return 带表达式 ─────────────────────────────
+
+// ERROR: void 函数 return 不能带表达式
+def bad_void_return() -> void {
+    puts("hello");
+    return 42;
+}
+
+// ── 用户自定义函数重载 ────────────────────────────────────
+
+def overload_me(a:i32) -> i32 {
+    return a;
+}
+
+// ERROR: 用户函数不支持重载 (同名已定义)
+def overload_me(a:str) -> str {
+    return a;
+}
+
+// ── 调用参数数量不匹配 ────────────────────────────────────
+
+def two_args(a:i32, b:str) -> void {
+    puts(str(a) + b);
+    return;
+}
+
+// ERROR: 参数数量不匹配 (1 vs 2)
+def bad_arg_count() -> void {
+    two_args(42);
+    return;
+}
+
+// ERROR: 参数数量不匹配 (3 vs 2)
+def bad_arg_count2() -> void {
+    two_args(1, "hi", true);
+    return;
+}
+
+// ── 调用参数类型不匹配 ────────────────────────────────────
+
+// ERROR: 参数类型不匹配 (str vs i32)
+def bad_arg_type() -> void {
+    two_args("hello", "world");
+    return;
+}

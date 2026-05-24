@@ -1,0 +1,92 @@
+// 类型不匹配 — 语义层应拒绝
+// 覆盖: 算术混用, 比较混用, 非bool条件, 逻辑操作数, ==/!=类型不一致, 非i32索引
+
+// ── 算术混用 ─────────────────────────────────────────────
+
+// ERROR: i32 + f64 混用
+def bad_add() -> i32 {
+    var x:i32 = 1;
+    var y:f64 = 2.0;
+    return x + y;
+}
+
+// ERROR: f64 * i32 混用
+def bad_mul() -> f64 {
+    var a:f64 = 3.0;
+    var b:i32 = 2;
+    return a * b;
+}
+
+// ── 比较混用 ─────────────────────────────────────────────
+
+// ERROR: i32 < f64 混用
+def bad_cmp(a:i32, b:f64) -> bool {
+    return a < b;
+}
+
+// ── 非 bool 条件 ─────────────────────────────────────────
+
+// ERROR: if 条件非 bool (i32)
+def bad_if() -> void {
+    var x:i32 = 1;
+    if x then puts("no");
+    return;
+}
+
+// ERROR: for 条件非 bool (i32)
+def bad_for_cond() -> void {
+    for var i:i32 = 0, i + 1, i = i + 1 in {
+        puts("no");
+    }
+    return;
+}
+
+// ── 逻辑操作数非 bool ────────────────────────────────────
+
+// ERROR: && 操作数非 bool
+def bad_and() -> bool {
+    var x:i32 = 1;
+    return x && true;
+}
+
+// ERROR: ! 操作数非 bool
+def bad_not() -> i32 {
+    return !42;
+}
+
+// ── 等值比较类型不一致 ────────────────────────────────────
+
+// ERROR: i32 == f64 类型不同
+def bad_eq(a:i32, b:f64) -> bool {
+    return a == b;
+}
+
+// ERROR: str == i32 类型不同
+def bad_str_eq(s:str, n:i32) -> bool {
+    return s == n;
+}
+
+// ── 非 i32 索引 ──────────────────────────────────────────
+
+// ERROR: 数组索引非 i32 (f64)
+def bad_index_f64(arr:[i32], idx:f64) -> i32 {
+    return arr[idx];
+}
+
+// ERROR: 字符串索引非 i32 (bool)
+def bad_index_bool(s:str) -> str {
+    var flag:bool = true;
+    return s[flag];
+}
+
+// ── 结构体构造字段类型不匹配 ──────────────────────────────
+
+struct Point {
+    x: f64;
+    y: f64;
+}
+
+// ERROR: 结构体字段类型不匹配 (str 赋给 f64)
+def bad_struct_field() -> Point {
+    return Point{x: "hello", y: 1.0};
+}

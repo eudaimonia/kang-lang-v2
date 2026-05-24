@@ -1,0 +1,42 @@
+// 数组类型违规 — 语义层应拒绝
+// 覆盖: [void], 数组元素类型不一致, push类型不匹配, len参数类型
+
+// ── [void] 数组 ──────────────────────────────────────────
+
+// ERROR: 数组元素不能是 void
+def bad_void_arr() -> [void] {
+    var arr:[void] = [];
+    return arr;
+}
+
+// ── 数组元素类型与声明的元素类型不一致 ──────────────────────
+
+// ERROR: 声明 [i32], 字面量含 f64
+def bad_array_elem_type() -> [i32] {
+    var arr:[i32] = [1, 2, 3.0];
+    return arr;
+}
+
+// ── push 元素类型不匹配 ────────────────────────────────────
+
+// ERROR: push 元素类型与数组元素类型不一致
+def bad_push_type() -> void {
+    var arr:[i32] = [1, 2];
+    push(arr, "hello");
+    return;
+}
+
+// ── push 到 str (str 不是数组) ────────────────────────────
+
+// ERROR: push 第一个参数必须是数组
+def bad_push_str(s:str) -> void {
+    push(s, "x");
+    return;
+}
+
+// ── len 参数类型 ──────────────────────────────────────────
+
+// ERROR: len 不接受 i32 (仅数组和 str)
+def bad_len_arg() -> i32 {
+    return len(42);
+}

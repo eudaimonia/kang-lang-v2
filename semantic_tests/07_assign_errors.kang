@@ -1,0 +1,57 @@
+// 赋值/左值违规 — 语义层应拒绝
+// 覆盖: str索引作左值, 赋值类型不匹配, 非左值赋值, 字面量赋值
+
+// ── str 索引作为左值 ─────────────────────────────────────
+
+// ERROR: str 不可变, s[i] 不能作左值
+def bad_str_lvalue(s:str) -> void {
+    s[0] = "x";
+    return;
+}
+
+// ── 赋值类型不匹配 ────────────────────────────────────────
+
+// ERROR: 赋值左右类型不一致 (str 赋给 i32)
+def bad_assign_type() -> void {
+    var x:i32 = 0;
+    x = "hello";
+    puts(str(x));
+    return;
+}
+
+// ── 非左值赋值 ────────────────────────────────────────────
+
+// ERROR: 字面量不是左值
+def bad_literal_lvalue() -> void {
+    42 = 10;
+    return;
+}
+
+// ERROR: 表达式结果不是左值
+def bad_expr_lvalue() -> void {
+    var x:i32 = 1;
+    var y:i32 = 2;
+    x + y = 3;
+    return;
+}
+
+// ── 结构体字段赋值类型不匹配 ──────────────────────────────
+
+struct Point {
+    x: f64;
+    y: f64;
+}
+
+// ERROR: 结构体字段赋值类型不匹配 (str 赋给 f64)
+def bad_field_assign(p:Point) -> void {
+    p.x = "hello";
+    return;
+}
+
+// ── 数组索引赋值类型不匹配 ──────────────────────────────
+
+// ERROR: 数组元素赋值类型不匹配
+def bad_index_assign(arr:[i32]) -> void {
+    arr[0] = true;
+    return;
+}

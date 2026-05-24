@@ -1,0 +1,63 @@
+// 结构体违规 — 语义层应拒绝
+// 覆盖: void字段, 直接自引用, 部分初始化, 函数内定义结构体, 非结构体字段访问
+
+// ── void 字段 ────────────────────────────────────────────
+
+// ERROR: 结构体字段不能是 void
+struct BadVoidField {
+    x: f64;
+    nothing: void;
+}
+
+// ── 直接自引用 ────────────────────────────────────────────
+
+// ERROR: 结构体不能直接包含自身 (非数组)
+struct BadSelfRef {
+    value: i32;
+    next: BadSelfRef;
+}
+
+// ── 间接自引用 (通过数组, 合法) ────────────────────────────
+
+// 以下应通过
+struct ListNode {
+    value: i32;
+    children: [ListNode];
+}
+
+// ── 部分初始化 ────────────────────────────────────────────
+
+struct Point {
+    x: f64;
+    y: f64;
+}
+
+// ERROR: 结构体构造缺少字段 y
+def bad_partial_init() -> Point {
+    return Point{x: 1.0};
+}
+
+// ERROR: 结构体构造多余字段
+def bad_extra_init() -> Point {
+    return Point{x: 1.0, y: 2.0, z: 3.0};
+}
+
+// ── 使用未定义的结构体类型 ──────────────────────────────────
+
+// ERROR: 类型 NoSuchStruct 未定义
+def bad_undefined_struct() -> NoSuchStruct {
+    var x:NoSuchStruct = NoSuchStruct{};
+    return x;
+}
+
+// ── 非结构体的字段访问 ────────────────────────────────────
+
+// ERROR: i32 没有字段
+def bad_field_on_int(n:i32) -> i32 {
+    return n.field;
+}
+
+// ERROR: 结构体访问不存在的字段
+def bad_missing_field(p:Point) -> f64 {
+    return p.z;
+}

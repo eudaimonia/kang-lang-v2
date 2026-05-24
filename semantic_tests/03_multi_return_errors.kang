@@ -1,0 +1,64 @@
+// 二值返回错误 — 语义层应拒绝
+// 覆盖: return数不匹配, 类型不匹配, 三接收, _ 作普通变量
+
+def divide(a:i32, b:i32) -> (i32, i32) {
+    var q:i32 = a / b;
+    var r:i32 = a - q * b;
+    return q, r;
+}
+
+def single() -> i32 {
+    return 42;
+}
+
+// ── return 数量不匹配 ────────────────────────────────────
+
+// ERROR: 声明二值返回, return 只有一个表达式
+def bad_return_one() -> (i32, i32) {
+    return 1;
+}
+
+// ERROR: 声明单返回, return 有两个表达式
+def bad_return_two() -> i32 {
+    return 1, 2;
+}
+
+// ── 二值返回的类型不匹配 ──────────────────────────────────
+
+// ERROR: 声明 (i32, i32), 返回 (str, i32)
+def bad_return_type() -> (i32, i32) {
+    return "hello", 42;
+}
+
+// ── var 接收数不匹配 ─────────────────────────────────────
+
+// ERROR: 函数返 1 值, var 试图 2 接收
+def bad_two_receive() -> void {
+    var a:i32, b:i32 = single();
+    puts(str(a));
+    return;
+}
+
+// ── _ 当作普通变量使用 ────────────────────────────────────
+
+// ERROR: _ 不作为变量绑定, 不能在表达式中使用
+def bad_use_discard() -> void {
+    var x:i32, _ = divide(10, 3);
+    var y:str = str(_);  // _ 不可引用
+    puts(y);
+    return;
+}
+
+// ── 单接收从 void 函数取第一值 (不适用) ───────────────────
+
+def void_func() -> void {
+    puts("side effect");
+    return;
+}
+
+// ERROR: 从 void 函数接收返回值
+def bad_void_receive() -> void {
+    var x:i32 = void_func();
+    puts(str(x));
+    return;
+}
