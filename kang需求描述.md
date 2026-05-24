@@ -15,7 +15,7 @@
 **复合类型**
 - `[T]`：数组，元素类型 T 可以是 i32/f64/str/bool/结构体，禁止 `[void]`
 - 结构体：`struct Name { field:Type; ... }`，值类型
-- 多返回类型：`(T1, T2, ...)` 仅用于函数返回类型，不可作为变量类型或结构体字段
+- 二值返回类型：`(T1, T2)` 仅用于函数返回类型，不可作为变量类型或结构体字段
   - 字段类型禁止 `void`
   - 禁止直接或间接自引用（`struct Node { next: Node }`），仅允许通过数组间接引用（`struct Node { children: [Node] }`）
 
@@ -49,8 +49,8 @@
 - 块：`{ }` 包裹多条语句，用分号 `;` 分隔或换行
 - 函数：`def name(params) -> (T1, T2) { body }`，单返回可省略括号
 - 变量（单接收）：`var name:type = expr;`（必须初始化）
-- 变量（多接收）：`var n1:T1, n2:T2 = expr;`，`_` 站位丢弃某个值
-- 返回：`return expr, expr;`（多返回）、`return expr;`（单返回）、`return;`（void）
+- 变量（二值接收）：`var n1:T1, n2:T2 = expr;`，最多两个，`_` 占位丢弃某个值
+- 返回：`return e1, e2;`（二值返回）、`return expr;`（单返回）、`return;`（void）
 - 非 void 函数所有代码路径必须显式 return，返回值的数量/类型必须匹配声明
 - 赋值：`lvalue = expr;`（lvalue 为变量名、`arr[i]`、`obj.field`；str 不可变，`s[i]` 禁止作为左值）
 - 分支：`if cond then ... else ...`（条件必须是 bool，else 可选）

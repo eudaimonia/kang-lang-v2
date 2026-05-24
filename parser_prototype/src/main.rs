@@ -287,15 +287,15 @@ impl Parser {
 
     // ── Type ────────────────────────────────────────────────────────────
     // BaseType   = "i32" | "f64" | "str" | "bool" | "void" | IDENT
-    // Type       = BaseType | "[" BaseType "]" | "(" Type { "," Type } ")"
-    // ReturnType = Type | "(" Type { "," Type } ")"
+    // Type       = BaseType | "[" BaseType "]" | "(" Type "," Type ")"
+    // ReturnType = Type | "(" Type "," Type ")"
 
     fn parse_type(&mut self) -> Result<(), ParseError> {
         if self.match_kw(TokenKind::LParen) {
+            // (T1, T2) — exactly two types
             self.parse_type_inner()?;
-            while self.match_kw(TokenKind::Comma) {
-                self.parse_type_inner()?;
-            }
+            self.expect_kw(TokenKind::Comma)?;
+            self.parse_type_inner()?;
             self.expect_kw(TokenKind::RParen)?;
         } else if self.match_kw(TokenKind::LBracket) {
             self.parse_basetype()?;
@@ -510,10 +510,10 @@ impl Parser {
     }
 
     fn parse_var_decl(&mut self) -> Result<(), ParseError> {
-        // VarDecl = "var" VarBinding { "," VarBinding } "=" Expr ";"
+        // VarDecl = "var" VarBinding [ "," VarBinding ] "=" Expr ";"
         self.expect_kw(TokenKind::Var)?;
         self.parse_var_binding()?;
-        while self.match_kw(TokenKind::Comma) {
+        if self.match_kw(TokenKind::Comma) {
             self.parse_var_binding()?;
         }
         self.expect_kw(TokenKind::Assign)?;
@@ -575,13 +575,13 @@ impl Parser {
     }
 
     fn parse_return_stmt(&mut self) -> Result<(), ParseError> {
-        // ReturnStmt = "return" [ Expr { "," Expr } ] ";"
+        // ReturnStmt = "return" [ Expr [ "," Expr ] ] ";"
         self.expect_kw(TokenKind::Return)?;
         if self.peek_kind() == &TokenKind::Semi {
             self.advance();
         } else {
             self.parse_expr()?;
-            while self.match_kw(TokenKind::Comma) {
+            if self.match_kw(TokenKind::Comma) {
                 self.parse_expr()?;
             }
             self.expect_kw(TokenKind::Semi)?;
