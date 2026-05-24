@@ -6,7 +6,7 @@
 ### 类型系统
 
 **基本类型**
-- `i32`：有符号 32 位整数
+- `i32`：有符号 32 位整数，溢出采用二进制补码回绕（wrapping）
 - `f64`：双精度浮点
 - `str`：不可变字符串，全局 Arena 管理
 - `bool`：true/false
@@ -48,8 +48,9 @@
 - 块：`{ }` 包裹多条语句，用分号 `;` 分隔或换行
 - 函数：`def name(param:type) -> type { body }`
 - 变量：`var name:type = expr;`（必须初始化）
-- 返回：`return expr;` 终止函数并返回值
-- 赋值：`lvalue = expr;`（lvalue 为变量名、`arr[i]`、`obj.field`）
+- 返回：`return expr;`（非 void 函数）、`return;`（void 函数）
+- 非 void 函数所有代码路径必须显式 return，否则编译错误
+- 赋值：`lvalue = expr;`（lvalue 为变量名、`arr[i]`、`obj.field`；str 不可变，`s[i]` 禁止作为左值）
 - 分支：`if cond then ... else ...`（条件必须是 bool，else 可选）
 - 循环：`for var name:type = init, cond, step in { body }`
   - 循环变量在循环体内作用域有效，循环结束后不可访问
@@ -57,7 +58,7 @@
   - `cond` 每次迭代前求值，必须是 bool，`false` 时退出
   - `step` 每次迭代后执行（赋值语句）
 - 结构体定义（仅限顶层）：`struct Name { field:Type; ... }`
-- 结构体构造：`Name{field: expr, ...}`
+- 结构体构造：`Name{field: expr, ...}`，必须为每个字段提供值，禁止部分初始化
 - 函数调用语句：`name(args);`（用于 `-> void` 函数，忽略返回值也可）
 
 **表达式**
@@ -95,9 +96,11 @@
 - 错误处理用返回值哨兵（空串/false/-1）。哨兵可能与合法值重叠（如空文件返回空串），v1 接受此限制
 
 ### 运行时安全
-以下行为触发运行时 panic（立即终止并输出错误信息），杜绝未定义行为：
-- 数组/字符串索引越界（`i < 0` 或 `i >= len(a)`）
-- 整数除零（`x / 0`）
+所有行为必须有确定结果，杜绝未定义行为：
+- 数组/字符串索引越界 → panic（立即终止并输出错误信息）
+- 整数除零 → panic
+- i32 溢出 → 二进制补码回绕
+- f64 运算 → 遵循 IEEE 754（含 NaN/Inf 语义）
 
 ### 内存管理
 全局 Arena，程序退出统一回收，用户无感知。
