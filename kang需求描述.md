@@ -46,12 +46,16 @@
 - 逻辑：`&& || !`（bool）
 
 ### 内置函数（封装 libc，12 个）
-- 字符串：`len(s)`、`str(n)`
+- 字符串：`len(s)`
 - 输出：`puts(s)`、`print(s)`、`eprint(s)`（stderr）
 - 输入：`read_file(path)`、`read_line()`
 - 写入：`write_file(path, content)`、`append_file(path, content)`
 - 查询：`file_exists(path)`、`file_size(path)`
-- 转换：`num(s)`（字符串转数字）
+- 转换（按参数类型重载区分）：
+  - `str(n: num)` — 数字转字符串
+  - `str(b: bool)` — 布尔转字符串
+  - `num(s: str)` — 字符串转数字
+  - `bool(s: str)` — 字符串转布尔
 - 错误处理用返回值哨兵（空串/false/-1.0）
 
 ### 内存管理
