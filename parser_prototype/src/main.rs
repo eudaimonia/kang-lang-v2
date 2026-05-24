@@ -287,17 +287,11 @@ impl Parser {
 
     // ── Type ────────────────────────────────────────────────────────────
     // BaseType   = "i32" | "f64" | "str" | "bool" | "void" | IDENT
-    // Type       = BaseType | "[" BaseType "]" | "(" Type "," Type ")"
+    // Type       = BaseType | "[" BaseType "]"
     // ReturnType = Type | "(" Type "," Type ")"
 
     fn parse_type(&mut self) -> Result<(), ParseError> {
-        if self.match_kw(TokenKind::LParen) {
-            // (T1, T2) — exactly two types
-            self.parse_type_inner()?;
-            self.expect_kw(TokenKind::Comma)?;
-            self.parse_type_inner()?;
-            self.expect_kw(TokenKind::RParen)?;
-        } else if self.match_kw(TokenKind::LBracket) {
+        if self.match_kw(TokenKind::LBracket) {
             self.parse_basetype()?;
             self.expect_kw(TokenKind::RBracket)?;
         } else {
@@ -306,12 +300,15 @@ impl Parser {
         Ok(())
     }
 
-    fn parse_type_inner(&mut self) -> Result<(), ParseError> {
-        if self.match_kw(TokenKind::LBracket) {
-            self.parse_basetype()?;
-            self.expect_kw(TokenKind::RBracket)?;
+    fn parse_return_type(&mut self) -> Result<(), ParseError> {
+        if self.match_kw(TokenKind::LParen) {
+            // (T1, T2) — exactly two types
+            self.parse_type()?;
+            self.expect_kw(TokenKind::Comma)?;
+            self.parse_type()?;
+            self.expect_kw(TokenKind::RParen)?;
         } else {
-            self.parse_basetype()?;
+            self.parse_type()?;
         }
         Ok(())
     }
@@ -650,7 +647,7 @@ impl Parser {
         }
         self.expect_kw(TokenKind::RParen)?;
         self.expect_kw(TokenKind::Arrow)?;
-        self.parse_type()?;
+        self.parse_return_type()?;
         self.parse_block()?;
         Ok(())
     }

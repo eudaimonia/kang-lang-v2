@@ -65,11 +65,12 @@ struct Empty {}  // 不推荐
 | `str(b: bool) -> str` | bool → str | `str(true)` → `"true"` |
 | `i32(s: str) -> (i32, bool)` | str → i32 | `i32("42")` → `(42, true)` |
 | `f64(s: str) -> (f64, bool)` | str → f64 | `f64("3.14")` → `(3.14, true)` |
-| `bool(s: str) -> (bool, bool)` | str → bool | `bool("true")` → `(true, true)` |
+| `bool(s: str) -> (bool, bool)` | str → bool | `bool("true")` → `(true, true)` (仅接受 `"true"` / `"false"`) |
 | `i32(n: f64) -> i32` | f64 → i32 | `i32(3.14)` → `3` (向零截断) |
 | `f64(n: i32) -> f64` | i32 → f64 | `f64(42)` → `42.0` (无损) |
 
 str→值 的三个转换函数返回 `(T, bool)`，第二个值为 `false` 表示转换失败。
+`bool(s)` 仅接受精确小写的 `"true"` 和 `"false"`。
 
 唯一的隐式转换例外: `+` 运算符任一侧为 `str` 时，另一侧自动转为字符串拼接。
 

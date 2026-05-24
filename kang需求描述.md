@@ -50,6 +50,7 @@
 - 函数：`def name(params) -> (T1, T2) { body }`，单返回可省略括号
 - 变量（单接收）：`var name:type = expr;`（必须初始化）
 - 变量（二值接收）：`var n1:T1, n2:T2 = expr;`，最多两个，`_` 占位丢弃某个值
+  - 单接收取第一个值：`var n:T = f()`，若 f 返回二值则取第一值、丢弃第二值
 - 返回：`return e1, e2;`（二值返回）、`return expr;`（单返回）、`return;`（void）
 - 非 void 函数所有代码路径必须显式 return，返回值的数量/类型必须匹配声明
 - 赋值：`lvalue = expr;`（lvalue 为变量名、`arr[i]`、`obj.field`；str 不可变，`s[i]` 禁止作为左值）
@@ -101,7 +102,7 @@
   - `str(b: bool) -> str` — 布尔转字符串
   - `i32(s: str) -> (i32, bool)` — 字符串转整数，失败时 bool 为 false
   - `f64(s: str) -> (f64, bool)` — 字符串转浮点，失败时 bool 为 false
-  - `bool(s: str) -> (bool, bool)` — 字符串转布尔，失败时第二个 bool 为 false
+  - `bool(s: str) -> (bool, bool)` — 字符串转布尔（仅接受精确 `"true"` / `"false"`），失败时第二个 bool 为 false
   - `i32(n: f64) -> i32` — 浮点转整数（向零截断，NaN/Inf → panic）
   - `f64(n: i32) -> f64` — 整数转浮点（无损）
 - 函数重载：仅内置函数支持按参数类型重载，用户自定义函数不支持

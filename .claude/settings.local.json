@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/eudaimonia/Dev/Others/myy/kang-v2-spec status)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(cargo init *)",
+      "Bash(cargo build *)",
+      "Bash(cargo run *)",
+      "Bash(git rm *)"
+    ]
+  }
+}
