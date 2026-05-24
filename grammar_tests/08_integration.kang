@@ -1,0 +1,65 @@
+// 综合测试: 自举编译器风格的代码
+// 覆盖: 多种语法组合使用
+
+struct Token {
+    kind: i32;
+    lexeme: str;
+    line: i32;
+}
+
+struct Lexer {
+    source: str;
+    pos: i32;
+    tokens: [Token];
+}
+
+def is_digit(ch:str) -> bool {
+    return ch == "0" || ch == "1" || ch == "2" || ch == "3" || ch == "4"
+        || ch == "5" || ch == "6" || ch == "7" || ch == "8" || ch == "9";
+}
+
+def is_alpha(ch:str) -> bool {
+    var result:bool = false;
+    var chars:str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
+    for var i:i32 = 0, i < len(chars), i = i + 1 in {
+        if ch == chars[i] then {
+            result = true;
+        }
+    }
+    return result;
+}
+
+def lex(source:str) -> [Token] {
+    var tokens:[Token] = [];
+    var pos:i32 = 0;
+    var line:i32 = 1;
+
+    for var i:i32 = 0, i < len(source), i = i + 1 in {
+        var ch:str = source[i];
+
+        if ch == "\n" then {
+            line = line + 1;
+        }
+
+        if is_digit(ch) then {
+            var tok:Token = Token{kind: 1, lexeme: ch, line: line};
+            push(tokens, tok);
+        }
+
+        if is_alpha(ch) then {
+            var tok:Token = Token{kind: 2, lexeme: ch, line: line};
+            push(tokens, tok);
+        }
+    }
+
+    return tokens;
+}
+
+def main() -> i32 {
+    var source:str = "hello 42 world\nline2 99";
+    var tokens:[Token] = lex(source);
+    var msg:str = "token count: ";
+    msg = msg + str(len(tokens));
+    puts(msg);
+    return 0;
+}

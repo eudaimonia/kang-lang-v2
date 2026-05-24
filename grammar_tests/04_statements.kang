@@ -1,0 +1,40 @@
+// 语句测试
+// 覆盖: VarDecl, AssignStmt, ReturnStmt, ExprStmt, Block
+
+struct Person { name: str; age: i32; }
+
+def echo(msg:str) -> void { puts(msg); return; }
+
+def test_statements() -> i32 {
+    // VarDecl: 必须初始化
+    var x:i32 = 0;
+    var s:str = "hello";
+    var b:bool = true;
+    var f:f64 = 3.14;
+    var p:Person = Person{name: "Alice", age: 30};
+
+    // AssignStmt: 变量赋值
+    x = 42;
+    s = "world";
+    b = false;
+    f = 2.71;
+
+    // AssignStmt: 结构体字段赋值 (LValue: obj.field)
+    p.name = "Bob";
+    p.age = 25;
+
+    // Block: 嵌套块
+    {
+        var inner:i32 = 99;
+        x = inner;
+    }
+
+    // ExprStmt: void 函数调用
+    echo("test");
+
+    // ReturnStmt: 带值
+    return x;
+
+    // ReturnStmt: 不带值 (void函数)
+    // return;  — 已在 void 函数中测试
+}

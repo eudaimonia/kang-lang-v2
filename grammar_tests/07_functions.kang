@@ -1,0 +1,27 @@
+// 函数定义测试
+// 覆盖: FuncDef, Params, 返回类型, void 函数, 多参数
+
+def no_params() -> i32 {
+    return 42;
+}
+
+def one_param(x:i32) -> i32 {
+    return x;
+}
+
+def many_params(a:i32, b:f64, c:str, d:bool) -> void {
+    puts(c);
+    return;
+}
+
+def void_return() -> void {
+    return;
+}
+
+def main() -> i32 {
+    var result:i32 = no_params();
+    result = result + one_param(1);
+    many_params(1, 2.0, "three", true);
+    void_return();
+    return 0;
+}

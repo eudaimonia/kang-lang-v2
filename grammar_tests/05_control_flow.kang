@@ -1,0 +1,51 @@
+// 控制流测试
+// 覆盖: IfStmt, ForStmt
+
+def abs(x:i32) -> i32 {
+    // if + then (无 else)
+    if x >= 0 then return x;
+    // if + then + else
+    if x < 0 then return -x;
+    return 0;
+}
+
+def max(a:i32, b:i32) -> i32 {
+    if a > b then return a;
+    return b;
+}
+
+def if_else_nested() -> void {
+    var x:i32 = 1;
+    var y:i32 = 2;
+
+    // 嵌套 if, else 绑定最近的 if
+    if x > 0 then
+        if y > 0 then puts("both positive");
+        else puts("y <= 0");
+
+    // else 绑定外层 if (通过块)
+    if x > 0 then {
+        if y > 0 then puts("both positive");
+    } else {
+        puts("x <= 0");
+    }
+
+    return;
+}
+
+def sum_loop(n:i32) -> i32 {
+    var total:i32 = 0;
+    // for var name:type = init, cond, step in { body }
+    for var i:i32 = 0, i < n, i = i + 1 in {
+        total = total + i;
+    }
+    return total;
+}
+
+def countdown(n:i32) -> void {
+    for var i:i32 = n, i > 0, i = i - 1 in {
+        var msg:str = str(i);
+        puts(msg);
+    }
+    return;
+}

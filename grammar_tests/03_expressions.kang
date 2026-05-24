@@ -1,0 +1,61 @@
+// 表达式优先级测试
+// 覆盖: OrExpr, AndExpr, EqExpr, CmpExpr, AddExpr, MulExpr, UnaryExpr, PostfixExpr
+
+struct Val { n: i32; }
+
+def get_val() -> Val { return Val{n: 1}; }
+
+def test_expr_precedence() -> void {
+    var a:i32 = 1;
+    var b:i32 = 2;
+    var c:i32 = 3;
+    var x:bool = true;
+    var y:bool = false;
+
+    // OrExpr: || 最低
+    var r1:bool = x || y;
+    var r2:bool = x || y || false;
+
+    // AndExpr: && 高于 ||
+    var r3:bool = x && y || true;       // ≡ (x && y) || true
+    var r4:bool = x || y && false;      // ≡ x || (y && false)
+
+    // EqExpr: == != 高于 &&, 低于比较
+    var r5:bool = a == b;
+    var r6:bool = a != b;
+    var r7:bool = a == b && c != 0;     // ≡ (a==b) && (c!=0)
+
+    // CmpExpr: < <= > >= 高于 ==
+    var r8:bool = a < b;
+    var r9:bool = a <= b;
+    var r10:bool = a > b;
+    var r11:bool = a >= b;
+    var r12:bool = a < b == true;       // ≡ (a < b) == true
+
+    // AddExpr: + - 高于比较, 低于乘法
+    var n1:i32 = a + b;
+    var n2:i32 = a - b;
+    var n3:bool = a + b > c;            // ≡ (a+b) > c
+
+    // MulExpr: * / 高于加法
+    var n4:i32 = a * b;
+    var n5:i32 = a / b;
+    var n6:i32 = a + b * c;             // ≡ a + (b*c)
+    var n7:i32 = a * b + c;             // ≡ (a*b) + c
+
+    // UnaryExpr: - ! 高于乘法
+    var n8:i32 = -a;
+    var n9:i32 = -a * b;                // ≡ (-a) * b
+    var r13:bool = !x;
+    var r14:bool = !x && y;             // ≡ (!x) && y
+
+    // PostfixExpr: 后缀操作最高优先级
+    var n10:i32 = get_val().n;          // 函数调用 + 字段访问
+    var v:Val = Val{n: 42};
+    var n11:i32 = v.n;                  // 字段访问
+
+    // 分组: 覆写优先级
+    var n12:i32 = (a + b) * c;          // 不同于 a + b * c
+
+    return;
+}

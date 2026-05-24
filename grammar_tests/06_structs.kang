@@ -1,0 +1,42 @@
+// 结构体测试
+// 覆盖: StructDef (顶层), StructLit, 字段访问, 数组元素为结构体
+
+struct Empty { }
+
+struct Token {
+    kind: i32;
+    lexeme: str;
+    line: i32;
+}
+
+struct ASTNode {
+    kind: i32;
+    value: str;
+    children: [ASTNode];
+}
+
+def make_token() -> Token {
+    var t:Token = Token{kind: 1, lexeme: "foo", line: 3};
+    return t;
+}
+
+def array_of_structs() -> void {
+    var tokens:[Token] = [];
+    var t:Token = Token{kind: 1, lexeme: "if", line: 1};
+    push(tokens, t);
+    t.kind = 2;
+    t.lexeme = "x";
+    t.line = 1;
+    push(tokens, t);
+    return;
+}
+
+def nested_field() -> void {
+    var n:ASTNode = ASTNode{
+        kind: 0,
+        value: "root",
+        children: []
+    };
+    n.kind = 1;
+    return;
+}

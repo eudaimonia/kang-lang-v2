@@ -1,0 +1,55 @@
+// 边界与压力测试
+// 覆盖: 极端输入、嵌套、空块、长表达式
+
+struct A { x: i32; }
+struct B { a: A; }
+struct C { b: B; }
+
+def empty_block() -> void {
+    { }
+    { { } }
+    return;
+}
+
+def deep_chain() -> i32 {
+    // 深层字段访问
+    var c:C = C{b: B{a: A{x: 42}}};
+    return c.b.a.x;
+}
+
+def long_expression() -> bool {
+    var a:i32 = 1;
+    var b:i32 = 2;
+    var c:i32 = 3;
+    var d:i32 = 4;
+    // 复杂混合表达式
+    var result:bool = a + b * c > d - 1 && a != 0 || b == 2;
+    return result;
+}
+
+def deeply_nested_if() -> void {
+    var x:i32 = 10;
+    if x > 0 then
+        if x > 5 then
+            if x > 8 then
+                if x > 9 then
+                    puts("deep");
+                else puts("9");
+            else puts("6-8");
+        else puts("1-5");
+    else puts("0 or neg");
+    return;
+}
+
+def many_args(a1:i32, a2:i32, a3:i32, a4:i32, a5:i32) -> i32 {
+    return a1 + a2 + a3 + a4 + a5;
+}
+
+def call_many_args() -> i32 {
+    return many_args(1, 2, 3, 4, 5);
+}
+
+def large_array() -> void {
+    var arr:[i32] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    return;
+}

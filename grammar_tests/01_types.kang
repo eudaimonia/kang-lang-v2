@@ -1,0 +1,14 @@
+// 类型系统测试
+// 覆盖: BaseType, Type (基本类型 + 数组类型)
+
+def f_i32(x:i32) -> i32 { return x; }
+def f_f64(x:f64) -> f64 { return x; }
+def f_str(x:str) -> str { return x; }
+def f_bool(x:bool) -> bool { return x; }
+def f_void() -> void { return; }
+
+// 数组类型
+def f_arr_i32(a:[i32]) -> [i32] { return a; }
+def f_arr_f64(a:[f64]) -> [f64] { return a; }
+def f_arr_str(a:[str]) -> [str] { return a; }
+def f_arr_bool(a:[bool]) -> [bool] { return a; }

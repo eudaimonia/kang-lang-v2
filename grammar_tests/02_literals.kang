@@ -1,0 +1,42 @@
+// 字面量测试
+// 覆盖: INT_LIT, FLOAT_LIT, STR_LIT, true, false, ArrayLit, StructLit
+
+struct Point { x: f64; y: f64; }
+
+def test_literals() -> void {
+    // 整数字面量
+    var i0:i32 = 0;
+    var i1:i32 = 42;
+    var i2:i32 = 2147483647;
+
+    // 浮点字面量 (负号由一元-处理, 此处测试正数)
+    var f0:f64 = 0.0;
+    var f1:f64 = 3.14;
+    var f2:f64 = 1.0;
+    var fn:f64 = -1.0;          // 一元 - 作用于字面量
+
+    // 字符串字面量 (含转义)
+    var s0:str = "";
+    var s1:str = "hello";
+    var s2:str = "line1\nline2";
+    var s3:str = "tab\there";
+    var s4:str = "quote\"inner\"";
+    var s5:str = "back\\slash";
+    var s6:str = "null\0term";
+
+    // 布尔字面量
+    var b0:bool = true;
+    var b1:bool = false;
+
+    // 数组字面量
+    var a0:[i32] = [];
+    var a1:[i32] = [1];
+    var a2:[i32] = [1, 2, 3];
+    var a3:[str] = ["a", "b"];
+    var a4:[bool] = [true, false, true];
+
+    // 结构体字面量
+    var p:Point = Point{x: 1.0, y: 2.0};
+
+    return;
+}
