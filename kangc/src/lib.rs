@@ -1,17 +1,19 @@
 // kangc — Kang 编译器库
 // 提供各编译阶段的公共 API: tokenize → parse → check → codegen
-// M1 实现 lexer + parser 阶段
+// M1: lexer + parser, M2: semantic, M4: codegen
 
 pub mod ast;
+pub mod codegen;
 pub mod error;
 pub mod lexer;
 pub mod parser;
+pub mod semantic;
 pub mod stats;
 
-use error::{KangError, LexError, ParseError};
+use error::{CodeGenError, KangError, LexError, ParseError, SemanticError};
 use lexer::tokenize as lex_tokenize;
 use parser::parse as parse_tokens;
-use stats::{LexStats, ParseStats, SourceStats};
+use stats::{CodeGenStats, LexStats, ParseStats, SemanticStats, SourceStats};
 
 /// 词法分析: 源码 → Token 流
 pub fn tokenize(source: &str, stats: &mut LexStats) -> Result<Vec<lexer::Token>, LexError> {
@@ -23,7 +25,17 @@ pub fn parse(tokens: &[lexer::Token], stats: &mut ParseStats) -> Result<ast::Pro
     parse_tokens(tokens, stats)
 }
 
-/// 编译全流程: 源码 → AST (后续阶段在 M2-M4 接入)
+/// 语义分析: AST → TypedProgram
+pub fn check(program: &ast::Program, stats: &mut SemanticStats) -> Result<semantic::TypedProgram, Vec<SemanticError>> {
+    semantic::check(program, stats)
+}
+
+/// 代码生成: TypedProgram → LLVM IR 文本
+pub fn codegen(program: &semantic::TypedProgram, stats: &mut CodeGenStats) -> Result<String, CodeGenError> {
+    codegen::codegen(program, stats)
+}
+
+/// 编译全流程: 源码 → TypedProgram (后续阶段在 M3-M4 接入)
 pub fn compile_full(source: &str, file_path: &str) -> Result<(ast::Program, SourceStats, LexStats, ParseStats), KangError> {
     let total_lines = source.lines().count();
 

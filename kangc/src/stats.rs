@@ -27,3 +27,23 @@ pub struct ParseStats {
     pub func_count: usize,
     pub struct_count: usize,
 }
+
+#[derive(Serialize, Debug, Clone)]
+pub struct SemanticStats {
+    pub duration_us: u64,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub symbol_count: usize,
+    pub type_check_passes: usize,
+    pub type_check_failures: usize,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct CodeGenStats {
+    pub duration_us: u64,
+    pub llvm_ir_bytes: usize,
+    pub llvm_instruction_count: usize,
+    pub llvm_basic_block_count: usize,
+    pub llvm_function_count: usize,
+    pub runtime_check_insertions: usize,
+}

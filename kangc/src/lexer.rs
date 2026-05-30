@@ -90,7 +90,8 @@ pub enum TokenKind {
 /// 解析字符串字面量中的转义序列
 fn parse_string(lex: &mut logos::Lexer<TokenKind>) -> Option<String> {
     let raw = lex.slice();
-    let inner = &raw[1..raw.len() - 1]; // 去掉首尾引号
+    // 使用 strip 避免 raw.len() < 2 时下溢（正则保证至少 ""，此处防御）
+    let inner = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or("");
     let mut result = String::with_capacity(inner.len());
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
@@ -101,7 +102,13 @@ fn parse_string(lex: &mut logos::Lexer<TokenKind>) -> Option<String> {
                 Some('\\') => result.push('\\'),
                 Some('"') => result.push('"'),
                 Some('0') => result.push('\0'),
-                _ => {} // 正则保证不会到这里
+                // 正则保证转义序列合法，但若正则变更则保留原文
+                other => {
+                    result.push('\\');
+                    if let Some(c2) = other {
+                        result.push(c2);
+                    }
+                }
             }
         } else {
             result.push(c);
@@ -137,7 +144,15 @@ pub fn tokenize(source: &str, stats: &mut LexStats) -> Result<Vec<Token>, LexErr
                 let (line, col) = line_col(source, span.start);
                 stats.duration_us = start.elapsed().as_micros() as u64;
                 return Err(LexError {
-                    msg: format!("无法识别的字符 '{}'", &source[span.clone()]),
+                    msg: format!(
+                        "无法识别的字符 '{}'",
+                        if source.is_char_boundary(span.start) && source.is_char_boundary(span.end) {
+                            &source[span.clone()]
+                        } else {
+                            // 防御：span 不在字符边界时显示字节序列（不会发生）
+                            "<invalid utf-8 boundary>"
+                        }
+                    ),
                     line,
                     col,
                     span,
@@ -175,8 +190,16 @@ pub fn tokenize(source: &str, stats: &mut LexStats) -> Result<Vec<Token>, LexErr
 }
 
 /// 计算给定字节偏移的行号和列号
+/// offset 必须在 UTF-8 字符边界上；否则自动修正到最近边界
 fn line_col(source: &str, offset: usize) -> (usize, usize) {
-    let prefix = &source[..offset.min(source.len())];
+    let safe_offset = offset.min(source.len());
+    // 防御：确保 offset 落在字符边界（logos 保证此条件永远成立）
+    let safe_offset = if source.is_char_boundary(safe_offset) {
+        safe_offset
+    } else {
+        (0..safe_offset).rev().find(|&i| source.is_char_boundary(i)).unwrap_or(0)
+    };
+    let prefix = &source[..safe_offset];
     let line = prefix.chars().filter(|&c| c == '\n').count() + 1;
     let last_newline = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
     let col = prefix[last_newline..].chars().count() + 1;
@@ -191,7 +214,8 @@ pub fn format_tokens(tokens: &[Token]) -> String {
     for t in tokens {
         let kind_name = format!("{:?}", t.kind).to_uppercase();
         let lexeme = token_lexeme(t);
-        writeln!(&mut out, "{} {:?} @ {}:{}", kind_name, lexeme, t.line, t.col).unwrap();
+        // String Write 不会失败，let _ 避免未来改为文件输出时 panic
+        let _ = writeln!(&mut out, "{} {:?} @ {}:{}", kind_name, lexeme, t.line, t.col);
     }
     out
 }

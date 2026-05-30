@@ -60,7 +60,7 @@ impl fmt::Display for ReturnType {
 
 // ── 表达式 ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinOp {
     Or,
     And,
@@ -95,7 +95,7 @@ impl fmt::Display for BinOp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UnaryOp {
     Neg,
     Not,

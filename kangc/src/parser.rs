@@ -9,16 +9,36 @@ use crate::stats::ParseStats;
 use std::collections::HashMap;
 use std::time::Instant;
 
+// 最大嵌套深度，防止恶意输入导致栈溢出
+const MAX_PARSE_DEPTH: usize = 256;
+
 // ── Parser 结构 ─────────────────────────────────────────────────────────────
 
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
-        Parser { tokens, pos: 0 }
+        Parser { tokens, pos: 0, depth: 0 }
+    }
+
+    /// 进入递归层级，超限则报错
+    fn enter_depth(&mut self, ctx: &str) -> Result<(), ParseError> {
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            return Err(self.error(format!(
+                "{} 嵌套深度超过限制 {}",
+                ctx, MAX_PARSE_DEPTH
+            )));
+        }
+        Ok(())
+    }
+
+    fn leave_depth(&mut self) {
+        self.depth -= 1;
     }
 
     // ── 基本操作 ─────────────────────────────────────────────────────────
@@ -119,7 +139,10 @@ impl<'a> Parser<'a> {
     // Expr = OrExpr
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        self.parse_or_expr()
+        self.enter_depth("表达式")?;
+        let result = self.parse_or_expr();
+        self.leave_depth();
+        result
     }
 
     // OrExpr = AndExpr { "||" AndExpr }
@@ -375,13 +398,19 @@ impl<'a> Parser<'a> {
 
     // Block = "{" { Stmt } "}"
     fn parse_block(&mut self) -> Result<Stmt, ParseError> {
-        self.expect(&TokenKind::LBrace)?;
-        let mut stmts = Vec::new();
-        while self.peek_kind() != &TokenKind::RBrace && self.peek_kind() != &TokenKind::Eof {
-            stmts.push(self.parse_stmt()?);
-        }
-        self.expect(&TokenKind::RBrace)?;
-        Ok(Stmt::Block(stmts))
+        self.enter_depth("语句块")?;
+        // 闭包确保 leave_depth 在所有返回路径上执行
+        let result = (|| {
+            self.expect(&TokenKind::LBrace)?;
+            let mut stmts = Vec::new();
+            while self.peek_kind() != &TokenKind::RBrace && self.peek_kind() != &TokenKind::Eof {
+                stmts.push(self.parse_stmt()?);
+            }
+            self.expect(&TokenKind::RBrace)?;
+            Ok(Stmt::Block(stmts))
+        })();
+        self.leave_depth();
+        result
     }
 
     // VarDecl = "var" VarBinding [ "," VarBinding ] "=" Expr ";"
@@ -589,7 +618,7 @@ impl<'a> Parser<'a> {
 // ── 左值转换 ────────────────────────────────────────────────────────────────
 
 /// 将解析好的表达式转换为左值
-/// 语义层会进一步检查 LValue 合法性，语法层接受全部合法形式
+/// 语法层在此检查 LValue 形式合法性(AS3/AS4)，不合法的左值在解析阶段直接拒绝
 fn expr_to_lvalue(expr: Expr, mark: usize, tokens: &[Token]) -> Result<LValue, ParseError> {
     match expr {
         Expr::Ident(name) => Ok(LValue::Ident(name)),
