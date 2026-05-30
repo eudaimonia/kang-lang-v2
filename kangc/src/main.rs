@@ -1,23 +1,16 @@
 // kangc CLI — Kang 编译器命令行入口
-// M1: kang lex / kang parse, M2: kang check
+// M1: kang lex / kang parse, M2: kang check, M4: kang codegen, M5: kang build / kang run
 
-use kangc::error::{emit_diagnostic, KangError};
-use kangc::lexer::format_tokens;
-use kangc::stats::{CodeGenStats, LexStats, ParseStats, SemanticStats, SourceStats};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use kangc::error::emit_diagnostic;
+use kangc::stats::CompilerStats;
+use kangc::{compile_to_stage, PipelineStage};
+use std::path::{Path, PathBuf};
 use std::process;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("用法: kang <子命令> [参数]");
-        eprintln!();
-        eprintln!("子命令:");
-        eprintln!("  lex       <file> [-o <file>] [--stats]    词法分析, 输出 Token Stream");
-        eprintln!("  parse     <file> [-o <file>] [--stats]    语法分析, 输出 AST");
-        eprintln!("  check     <file> [--stats]                 语义分析, 报告错误或 OK");
-        eprintln!("  codegen   <file> [-o <file>] [--stats]    代码生成, 输出 LLVM IR");
+        print_usage();
         process::exit(1);
     }
 
@@ -28,7 +21,9 @@ fn main() {
         "lex" => cmd_lex(rest),
         "parse" => cmd_parse(rest),
         "check" => cmd_check(rest),
-        "codegen" => cmd_codegen(rest),
+        "codegen" | "emit-llvm" => cmd_codegen(rest),
+        "build" => cmd_build(rest),
+        "run" => cmd_run(rest),
         _ => {
             eprintln!("未知子命令: {}", subcmd);
             process::exit(1);
@@ -36,325 +31,36 @@ fn main() {
     }
 }
 
-// ── kang lex ────────────────────────────────────────────────────────────────
-
-fn cmd_lex(args: &[String]) {
-    let (file_path, out_path, show_stats) = parse_common_args(args);
-
-    let source = read_file(&file_path);
-    let total_lines = source.lines().count();
-    let mut stats = LexStats {
-        duration_us: 0,
-        token_count: 0,
-        token_counts_by_kind: HashMap::new(),
-        comment_bytes: 0,
-    };
-
-    let tokens = match kangc::lexer::tokenize(&source, &mut stats) {
-        Ok(t) => t,
-        Err(e) => {
-            emit_diagnostic(
-                &kangc::error::KangError::Lex(e),
-                &source,
-                &file_path.to_string_lossy(),
-            );
-            process::exit(1);
-        }
-    };
-
-    let output = format_tokens(&tokens);
-
-    match &out_path {
-        Some(path) => {
-            std::fs::write(path, &output).unwrap_or_else(|e| {
-                eprintln!("写入文件失败 {}: {}", path.display(), e);
-                process::exit(1);
-            });
-        }
-        None => {
-            println!("{}", output);
-        }
-    }
-
-    if show_stats {
-        let source_stats = SourceStats {
-            file_path: file_path.to_string_lossy().to_string(),
-            total_bytes: source.len(),
-            total_lines,
-        };
-        let stats_json = serde_json::to_string_pretty(&serde_json::json!({
-            "source": source_stats,
-            "lex": stats,
-        }))
-        .expect("stats 序列化不应失败");
-        eprintln!("{}", stats_json);
-    }
+fn print_usage() {
+    eprintln!("用法: kang <子命令> [参数]");
+    eprintln!();
+    eprintln!("子命令:");
+    eprintln!("  lex       <file> [-o <file>] [--stats] [--target=<triple>]    词法分析, 输出 Token Stream");
+    eprintln!("  parse     <file> [-o <file>] [--stats] [--target=<triple>]    语法分析, 输出 AST");
+    eprintln!("  check     <file> [--stats]                                      语义分析, 报告错误或 OK");
+    eprintln!("  codegen   <file> [-o <file>] [--stats] [--target=<triple>]    代码生成, 输出 LLVM IR");
+    eprintln!("  emit-llvm <file> [-o <file>] [--stats] [--target=<triple>]    同 codegen");
+    eprintln!("  build     <file> [-o <file>] [--stats] [--target=<triple>] [--emit=<stage>]  AOT 编译");
+    eprintln!("  run       <file> [--stats] [--target=<triple>]                  编译并执行");
 }
 
-// ── kang parse ──────────────────────────────────────────────────────────────
+// ── 参数解析 ────────────────────────────────────────────────────────────────
 
-fn cmd_parse(args: &[String]) {
-    let (file_path, out_path, show_stats) = parse_common_args(args);
-
-    let source = read_file(&file_path);
-    let total_lines = source.lines().count();
-
-    let mut lex_stats = LexStats {
-        duration_us: 0,
-        token_count: 0,
-        token_counts_by_kind: HashMap::new(),
-        comment_bytes: 0,
-    };
-    let mut parse_stats = ParseStats {
-        duration_us: 0,
-        ast_node_count: 0,
-        ast_max_depth: 0,
-        node_counts_by_kind: HashMap::new(),
-        func_count: 0,
-        struct_count: 0,
-    };
-
-    let tokens = match kangc::lexer::tokenize(&source, &mut lex_stats) {
-        Ok(t) => t,
-        Err(e) => {
-            emit_diagnostic(
-                &kangc::error::KangError::Lex(e),
-                &source,
-                &file_path.to_string_lossy(),
-            );
-            process::exit(1);
-        }
-    };
-
-    let program = match kangc::parser::parse(&tokens, &mut parse_stats) {
-        Ok(p) => p,
-        Err(e) => {
-            emit_diagnostic(
-                &kangc::error::KangError::Parse(e),
-                &source,
-                &file_path.to_string_lossy(),
-            );
-            process::exit(1);
-        }
-    };
-
-    let output = format!("{}", program);
-
-    match &out_path {
-        Some(path) => {
-            std::fs::write(path, &output).unwrap_or_else(|e| {
-                eprintln!("写入文件失败 {}: {}", path.display(), e);
-                process::exit(1);
-            });
-        }
-        None => {
-            println!("{}", output);
-        }
-    }
-
-    if show_stats {
-        let source_stats = SourceStats {
-            file_path: file_path.to_string_lossy().to_string(),
-            total_bytes: source.len(),
-            total_lines,
-        };
-        let stats_json = serde_json::to_string_pretty(&serde_json::json!({
-            "source": source_stats,
-            "lex": lex_stats,
-            "parse": parse_stats,
-        }))
-        .expect("stats 序列化不应失败");
-        eprintln!("{}", stats_json);
-    }
+struct CompileArgs {
+    file_path: PathBuf,
+    out_path: Option<PathBuf>,
+    show_stats: bool,
+    emit: Option<PipelineStage>,
+    target: Option<String>,
 }
 
-// ── kang check ──────────────────────────────────────────────────────────────
-
-fn cmd_check(args: &[String]) {
-    let (file_path, _out_path, show_stats) = parse_common_args(args);
-
-    let source = read_file(&file_path);
-    let total_lines = source.lines().count();
-
-    let mut lex_stats = LexStats {
-        duration_us: 0,
-        token_count: 0,
-        token_counts_by_kind: HashMap::new(),
-        comment_bytes: 0,
-    };
-    let mut parse_stats = ParseStats {
-        duration_us: 0,
-        ast_node_count: 0,
-        ast_max_depth: 0,
-        node_counts_by_kind: HashMap::new(),
-        func_count: 0,
-        struct_count: 0,
-    };
-    let mut semantic_stats = SemanticStats {
-        duration_us: 0,
-        error_count: 0,
-        warning_count: 0,
-        symbol_count: 0,
-        type_check_passes: 0,
-        type_check_failures: 0,
-    };
-
-    let tokens = match kangc::lexer::tokenize(&source, &mut lex_stats) {
-        Ok(t) => t,
-        Err(e) => {
-            emit_diagnostic(&KangError::Lex(e), &source, &file_path.to_string_lossy());
-            process::exit(1);
-        }
-    };
-
-    let program = match kangc::parser::parse(&tokens, &mut parse_stats) {
-        Ok(p) => p,
-        Err(e) => {
-            emit_diagnostic(&KangError::Parse(e), &source, &file_path.to_string_lossy());
-            process::exit(1);
-        }
-    };
-
-    match kangc::semantic::check(&program, &mut semantic_stats) {
-        Ok(_typed) => {
-            println!("OK");
-        }
-        Err(errors) => {
-            for e in &errors {
-                emit_diagnostic(&KangError::Semantic(e.clone()), &source, &file_path.to_string_lossy());
-            }
-            if !errors.is_empty() {
-                process::exit(1);
-            }
-        }
-    }
-
-    if show_stats {
-        let source_stats = SourceStats {
-            file_path: file_path.to_string_lossy().to_string(),
-            total_bytes: source.len(),
-            total_lines,
-        };
-        let stats_json = serde_json::to_string_pretty(&serde_json::json!({
-            "source": source_stats,
-            "lex": lex_stats,
-            "parse": parse_stats,
-            "semantic": semantic_stats,
-        }))
-        .expect("stats 序列化不应失败");
-        eprintln!("{}", stats_json);
-    }
-}
-
-// ── kang codegen ─────────────────────────────────────────────────────────────
-
-fn cmd_codegen(args: &[String]) {
-    let (file_path, out_path, show_stats) = parse_common_args(args);
-
-    let source = read_file(&file_path);
-    let total_lines = source.lines().count();
-
-    let mut lex_stats = LexStats {
-        duration_us: 0,
-        token_count: 0,
-        token_counts_by_kind: HashMap::new(),
-        comment_bytes: 0,
-    };
-    let mut parse_stats = ParseStats {
-        duration_us: 0,
-        ast_node_count: 0,
-        ast_max_depth: 0,
-        node_counts_by_kind: HashMap::new(),
-        func_count: 0,
-        struct_count: 0,
-    };
-    let mut semantic_stats = SemanticStats {
-        duration_us: 0,
-        error_count: 0,
-        warning_count: 0,
-        symbol_count: 0,
-        type_check_passes: 0,
-        type_check_failures: 0,
-    };
-    let mut codegen_stats = CodeGenStats {
-        duration_us: 0,
-        llvm_ir_bytes: 0,
-        llvm_instruction_count: 0,
-        llvm_basic_block_count: 0,
-        llvm_function_count: 0,
-        runtime_check_insertions: 0,
-    };
-
-    let tokens = match kangc::lexer::tokenize(&source, &mut lex_stats) {
-        Ok(t) => t,
-        Err(e) => {
-            emit_diagnostic(&KangError::Lex(e), &source, &file_path.to_string_lossy());
-            process::exit(1);
-        }
-    };
-
-    let program = match kangc::parser::parse(&tokens, &mut parse_stats) {
-        Ok(p) => p,
-        Err(e) => {
-            emit_diagnostic(&KangError::Parse(e), &source, &file_path.to_string_lossy());
-            process::exit(1);
-        }
-    };
-
-    let typed_program = match kangc::semantic::check(&program, &mut semantic_stats) {
-        Ok(tp) => tp,
-        Err(errors) => {
-            for e in &errors {
-                emit_diagnostic(&KangError::Semantic(e.clone()), &source, &file_path.to_string_lossy());
-            }
-            process::exit(1);
-        }
-    };
-
-    let cg_result = match kangc::codegen(&typed_program, &mut codegen_stats) {
-        Ok(result) => result,
-        Err(e) => {
-            emit_diagnostic(&KangError::CodeGen(e), &source, &file_path.to_string_lossy());
-            process::exit(1);
-        }
-    };
-
-    match &out_path {
-        Some(path) => {
-            std::fs::write(path, &cg_result.ir_text).unwrap_or_else(|e| {
-                eprintln!("写入文件失败 {}: {}", path.display(), e);
-                process::exit(1);
-            });
-        }
-        None => {
-            println!("{}", cg_result.ir_text);
-        }
-    }
-
-    if show_stats {
-        let source_stats = SourceStats {
-            file_path: file_path.to_string_lossy().to_string(),
-            total_bytes: source.len(),
-            total_lines,
-        };
-        let stats_json = serde_json::to_string_pretty(&serde_json::json!({
-            "source": source_stats,
-            "lex": lex_stats,
-            "parse": parse_stats,
-            "semantic": semantic_stats,
-            "codegen": codegen_stats,
-        }))
-        .expect("stats 序列化不应失败");
-        eprintln!("{}", stats_json);
-    }
-}
-
-// ── 公共辅助 ────────────────────────────────────────────────────────────────
-
-fn parse_common_args(args: &[String]) -> (PathBuf, Option<PathBuf>, bool) {
+/// 解析编译器 CLI 参数: 位置参数、-o、--stats、--emit=<stage>、--target=<triple>
+fn parse_compile_args(args: &[String]) -> CompileArgs {
     let mut file_path = None;
     let mut out_path = None;
     let mut show_stats = false;
+    let mut emit = None;
+    let mut target = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -370,6 +76,16 @@ fn parse_common_args(args: &[String]) -> (PathBuf, Option<PathBuf>, bool) {
             }
             "--stats" => {
                 show_stats = true;
+            }
+            arg if arg.starts_with("--emit=") => {
+                let stage_str = &arg["--emit=".len()..];
+                emit = Some(PipelineStage::from_emit_flag(stage_str).unwrap_or_else(|| {
+                    eprintln!("未知的 --emit 值: {} (支持: tokens, ast, typed-ast, llvm-ir, object)", stage_str);
+                    process::exit(1);
+                }));
+            }
+            arg if arg.starts_with("--target=") => {
+                target = Some(arg["--target=".len()..].to_string());
             }
             arg if !arg.starts_with('-') && file_path.is_none() => {
                 file_path = Some(PathBuf::from(arg));
@@ -387,8 +103,275 @@ fn parse_common_args(args: &[String]) -> (PathBuf, Option<PathBuf>, bool) {
         process::exit(1);
     });
 
-    (file_path, out_path, show_stats)
+    CompileArgs { file_path, out_path, show_stats, emit, target }
 }
+
+// ── 各子命令 ────────────────────────────────────────────────────────────────
+
+fn cmd_lex(args: &[String]) {
+    let cargs = parse_compile_args(args);
+    let stage = cargs.emit.unwrap_or(PipelineStage::Tokens);
+    run_to_stage(cargs, stage, false);
+}
+
+fn cmd_parse(args: &[String]) {
+    let cargs = parse_compile_args(args);
+    let stage = cargs.emit.unwrap_or(PipelineStage::Ast);
+    run_to_stage(cargs, stage, false);
+}
+
+fn cmd_check(args: &[String]) {
+    let cargs = parse_compile_args(args);
+    let stage = cargs.emit.unwrap_or(PipelineStage::TypedAst);
+    run_to_stage(cargs, stage, true);
+}
+
+fn cmd_codegen(args: &[String]) {
+    let cargs = parse_compile_args(args);
+    let stage = cargs.emit.unwrap_or(PipelineStage::LlvmIr);
+    run_to_stage(cargs, stage, false);
+}
+
+fn cmd_build(args: &[String]) {
+    let cargs = parse_compile_args(args);
+    let emit = cargs.emit;
+    let stage = emit.unwrap_or(PipelineStage::Object);
+
+    // --emit 截断到 IR 或更早阶段: 走文本输出路径
+    if stage < PipelineStage::Object {
+        run_to_stage(cargs, stage, false);
+        return;
+    }
+
+    // 生成 .o 文件
+    let obj_path = if cargs.out_path.is_some() && emit == Some(PipelineStage::Object) {
+        // --emit=object -o <path>: .o 写入指定路径
+        cargs.out_path.clone().unwrap()
+    } else {
+        cargs.file_path.with_extension("o")
+    };
+
+    // 提前计算链接相关路径（避免后续 move cargs.out_path）
+    let exe_path = cargs.out_path.clone().unwrap_or_else(|| {
+        let mut p = cargs.file_path.clone();
+        p.set_extension("");
+        p
+    });
+    let stdout_obj = cargs.out_path.is_none() && emit == Some(PipelineStage::Object);
+
+    let source = read_file(&cargs.file_path);
+    let target_triple = cargs.target.as_deref();
+
+    match compile_to_stage(
+        &source,
+        &cargs.file_path.to_string_lossy(),
+        target_triple,
+        stage,
+        Some(&obj_path),
+    ) {
+        Ok((stats, Some(_))) => {
+            if emit.is_none() {
+                // 默认: 链接为可执行文件
+                let kangrt_path = find_or_build_kangrt(target_triple);
+                link_executable(&obj_path, &kangrt_path, &exe_path);
+                let _ = std::fs::remove_file(&obj_path);
+            } else if stdout_obj {
+                // --emit=object 无 -o: 输出路径到 stdout
+                println!("{}", obj_path.display());
+            }
+            if cargs.show_stats {
+                print_stats(&stats, stage);
+            }
+        }
+        Ok(_) => unreachable!(),
+        Err(e) => {
+            emit_diagnostic(&e, &source, &cargs.file_path.to_string_lossy());
+            process::exit(1);
+        }
+    }
+}
+
+fn cmd_run(args: &[String]) {
+    let cargs = parse_compile_args(args);
+
+    let source = read_file(&cargs.file_path);
+    let target_triple = cargs.target.as_deref();
+
+    let obj_path = cargs.file_path.with_extension("o");
+    let exe_path = cargs.file_path.with_extension("");
+
+    match compile_to_stage(
+        &source,
+        &cargs.file_path.to_string_lossy(),
+        target_triple,
+        PipelineStage::Object,
+        Some(&obj_path),
+    ) {
+        Ok((stats, _)) => {
+            let kangrt_path = find_or_build_kangrt(target_triple);
+            link_executable(&obj_path, &kangrt_path, &exe_path);
+            let _ = std::fs::remove_file(&obj_path);
+
+            if cargs.show_stats {
+                print_stats(&stats, PipelineStage::Object);
+            }
+
+            // 执行生成的可执行文件
+            let exit_status = process::Command::new(&exe_path)
+                .status()
+                .unwrap_or_else(|e| {
+                    eprintln!("无法执行程序 {}: {}", exe_path.display(), e);
+                    let _ = std::fs::remove_file(&exe_path);
+                    process::exit(1);
+                });
+
+            let _ = std::fs::remove_file(&exe_path);
+
+            if !exit_status.success() {
+                process::exit(exit_status.code().unwrap_or(1));
+            }
+        }
+        Err(e) => {
+            emit_diagnostic(&e, &source, &cargs.file_path.to_string_lossy());
+            process::exit(1);
+        }
+    }
+}
+
+// ── 共享管线执行 ────────────────────────────────────────────────────────────
+
+/// 执行编译管线到指定阶段，处理输出和统计
+fn run_to_stage(cargs: CompileArgs, stage: PipelineStage, check_mode: bool) {
+    let source = read_file(&cargs.file_path);
+
+    let object_path = if stage >= PipelineStage::Object {
+        cargs.out_path.as_deref()
+    } else {
+        None
+    };
+
+    match compile_to_stage(
+        &source,
+        &cargs.file_path.to_string_lossy(),
+        cargs.target.as_deref(),
+        stage,
+        object_path,
+    ) {
+        Ok((stats, output)) => {
+            if check_mode {
+                println!("OK");
+            } else if let Some(text) = output {
+                match &cargs.out_path {
+                    Some(path) => {
+                        std::fs::write(path, &text).unwrap_or_else(|e| {
+                            eprintln!("写入文件失败 {}: {}", path.display(), e);
+                            process::exit(1);
+                        });
+                    }
+                    None => println!("{}", text),
+                }
+            }
+            if cargs.show_stats {
+                print_stats(&stats, stage);
+            }
+        }
+        Err(e) => {
+            emit_diagnostic(&e, &source, &cargs.file_path.to_string_lossy());
+            process::exit(1);
+        }
+    }
+}
+
+// ── 统计输出 ────────────────────────────────────────────────────────────────
+
+/// 输出编译器统计数据到 stderr (JSON)，按执行阶段截断
+fn print_stats(stats: &CompilerStats, stage: PipelineStage) {
+    let mut json = serde_json::json!({
+        "source": &stats.source,
+        "lex": &stats.lex,
+    });
+
+    if stage >= PipelineStage::Ast {
+        json["parse"] = serde_json::to_value(&stats.parse).unwrap();
+    }
+    if stage >= PipelineStage::TypedAst {
+        json["semantic"] = serde_json::to_value(&stats.semantic).unwrap();
+    }
+    if stage >= PipelineStage::LlvmIr {
+        json["codegen"] = serde_json::to_value(&stats.codegen).unwrap();
+    }
+
+    let stats_json = serde_json::to_string_pretty(&json).expect("stats 序列化不应失败");
+    eprintln!("{}", stats_json);
+}
+
+// ── 链接基础设施 ────────────────────────────────────────────────────────────
+
+/// 查找 workspace 根目录（kangc/Cargo.toml 的父目录）
+fn find_project_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("找不到 workspace 根目录")
+        .to_path_buf()
+}
+
+/// 查找或构建 libkangrt.a，返回 .a 文件路径
+fn find_or_build_kangrt(target_triple: Option<&str>) -> PathBuf {
+    let project_root = find_project_root();
+
+    let lib_dir = match target_triple {
+        Some(t) => project_root.join("target").join(t).join("release"),
+        None => project_root.join("target").join("release"),
+    };
+
+    let lib_path = lib_dir.join("libkangrt.a");
+    if lib_path.exists() {
+        return lib_path;
+    }
+
+    // 未找到，构建 kangrt
+    let display_triple = target_triple.unwrap_or("host");
+    eprintln!("正在构建 kangrt (target: {})...", display_triple);
+    let mut cmd = process::Command::new("cargo");
+    cmd.args(["build", "--release", "-p", "kangrt"]);
+    if let Some(t) = target_triple {
+        cmd.args(["--target", t]);
+    }
+    cmd.current_dir(&project_root);
+
+    let status = cmd.status().unwrap_or_else(|e| {
+        eprintln!("无法启动 cargo 构建 kangrt: {}", e);
+        process::exit(1);
+    });
+
+    if !status.success() {
+        eprintln!("kangrt 构建失败");
+        process::exit(1);
+    }
+
+    lib_path
+}
+
+/// 使用系统 cc 链接 .o 文件 + libkangrt.a → 可执行文件
+fn link_executable(obj_path: &Path, kangrt_path: &Path, out_path: &Path) {
+    let status = process::Command::new("cc")
+        .arg(obj_path)
+        .arg(kangrt_path)
+        .arg("-o")
+        .arg(out_path)
+        .status()
+        .unwrap_or_else(|e| {
+            eprintln!("无法启动链接器 cc: {}", e);
+            process::exit(1);
+        });
+
+    if !status.success() {
+        eprintln!("链接失败");
+        process::exit(1);
+    }
+}
+
+// ── 公共辅助 ────────────────────────────────────────────────────────────────
 
 fn read_file(path: &PathBuf) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|e| {

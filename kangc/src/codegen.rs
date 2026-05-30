@@ -13,11 +13,19 @@ use crate::semantic::{KangType, TypedProgram, TypedTopLevel};
 use crate::stats::{CodeGenResult, CodeGenStats};
 use context::CodeGenContext;
 use inkwell::context::Context;
+use inkwell::targets::{CodeModel, FileType, RelocMode, Target, TargetTriple};
+use inkwell::OptimizationLevel;
+use std::path::Path;
 
-/// 将 TypedProgram 代码生成为 LLVM IR 文本
-pub fn codegen(program: &TypedProgram, stats: &mut CodeGenStats) -> Result<CodeGenResult, CodeGenError> {
+/// 将 TypedProgram 代码生成为 LLVM IR，可选输出目标文件
+pub fn codegen(
+    program: &TypedProgram,
+    stats: &mut CodeGenStats,
+    target_triple: Option<&str>,
+    object_path: Option<&Path>,
+) -> Result<CodeGenResult, CodeGenError> {
     let llvm_context = Context::create();
-    let mut ctx = CodeGenContext::new(&llvm_context, "kang_module");
+    let mut ctx = CodeGenContext::new(&llvm_context, "kang_module", target_triple);
 
     // 声明所有内置函数
     builtins::declare_all(&mut ctx);
@@ -63,9 +71,45 @@ pub fn codegen(program: &TypedProgram, stats: &mut CodeGenStats) -> Result<CodeG
         }
     }
 
+    // 可选: 输出目标文件 (.o)
+    let object_file = if let Some(path) = object_path {
+        emit_object_file(&ctx.module, &ctx.target_triple, path)?;
+        Some(path.to_string_lossy().to_string())
+    } else {
+        None
+    };
+
     Ok(CodeGenResult {
         ir_text: ir_string,
         stats: stats.clone(),
+        object_file,
+    })
+}
+
+/// 将 LLVM Module 写入目标文件 (.o)
+fn emit_object_file(
+    module: &inkwell::module::Module,
+    triple_str: &str,
+    path: &Path,
+) -> Result<(), CodeGenError> {
+    let triple = TargetTriple::create(triple_str);
+    let target = Target::from_triple(&triple).map_err(|e| CodeGenError {
+        msg: format!("不支持的目标 triple '{}': {:?}", triple_str, e),
+    })?;
+    let machine = target
+        .create_target_machine(
+            &triple,
+            "",
+            "",
+            OptimizationLevel::Default,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| CodeGenError {
+            msg: format!("无法为 '{}' 创建 TargetMachine", triple_str),
+        })?;
+    machine.write_to_file(module, FileType::Object, path).map_err(|e| CodeGenError {
+        msg: format!("写入目标文件失败 '{}': {:?}", path.display(), e),
     })
 }
 
@@ -156,7 +200,7 @@ mod tests {
         let tokens = lexer::tokenize(source, &mut lex_stats).expect("lex");
         let program = parser::parse(&tokens, &mut parse_stats).expect("parse");
         let typed = semantic::check(&program, &mut sem_stats).expect("check");
-        codegen(&typed, &mut cg_stats).expect("codegen").ir_text
+        codegen(&typed, &mut cg_stats, None, None).expect("codegen").ir_text
     }
 
     #[test]
@@ -250,7 +294,7 @@ mod tests {
                 }
             };
 
-            match codegen(&typed, &mut cg_stats) {
+            match codegen(&typed, &mut cg_stats, None, None) {
                 Ok(result) => {
                     assert!(!result.ir_text.is_empty(), "{}: IR 不应为空", file);
                     assert!(result.ir_text.contains("source_filename"), "{}: IR 应包含 source_filename", file);

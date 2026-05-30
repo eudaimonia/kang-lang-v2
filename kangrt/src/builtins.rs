@@ -13,9 +13,19 @@ struct FILE {
 }
 
 unsafe extern "C" {
-    // 标准 I/O 流（POSIX 规范为 FILE *const，指针本身不可变）
+    // 标准 I/O 流 — macOS 使用 __stdinp/__stdoutp/__stderrp，Linux 使用 stdin/stdout/stderr
+    #[cfg(target_os = "macos")]
+    static __stdinp: *mut FILE;
+    #[cfg(target_os = "macos")]
+    static __stdoutp: *mut FILE;
+    #[cfg(target_os = "macos")]
+    static __stderrp: *mut FILE;
+
+    #[cfg(not(target_os = "macos"))]
     static stdin: *mut FILE;
+    #[cfg(not(target_os = "macos"))]
     static stdout: *mut FILE;
+    #[cfg(not(target_os = "macos"))]
     static stderr: *mut FILE;
 
     // stdio
@@ -40,6 +50,28 @@ unsafe extern "C" {
 
     // unistd
     fn access(path: *const u8, mode: i32) -> i32;
+}
+
+/// 平台无关的 stdin/stdout/stderr 访问（macOS 与 Linux 符号名不同）
+fn stdin_ptr() -> *mut FILE {
+    #[cfg(target_os = "macos")]
+    unsafe { __stdinp }
+    #[cfg(not(target_os = "macos"))]
+    unsafe { stdin }
+}
+
+fn stdout_ptr() -> *mut FILE {
+    #[cfg(target_os = "macos")]
+    unsafe { __stdoutp }
+    #[cfg(not(target_os = "macos"))]
+    unsafe { stdout }
+}
+
+fn stderr_ptr() -> *mut FILE {
+    #[cfg(target_os = "macos")]
+    unsafe { __stderrp }
+    #[cfg(not(target_os = "macos"))]
+    unsafe { stderr }
 }
 
 const F_OK: i32 = 0;
@@ -114,8 +146,8 @@ pub unsafe extern "C" fn k_push(
 pub unsafe extern "C" fn k_puts(s: *const u8, len: i32) {
     unsafe {
         let c_str = to_c_str(s, len);
-        fputs(c_str, stdout);
-        fputc(b'\n' as i32, stdout);
+        fputs(c_str, stdout_ptr());
+        fputc(b'\n' as i32, stdout_ptr());
     }
 }
 
@@ -124,7 +156,7 @@ pub unsafe extern "C" fn k_puts(s: *const u8, len: i32) {
 pub unsafe extern "C" fn k_print(s: *const u8, len: i32) {
     unsafe {
         let c_str = to_c_str(s, len);
-        fputs(c_str, stdout);
+        fputs(c_str, stdout_ptr());
     }
 }
 
@@ -133,7 +165,7 @@ pub unsafe extern "C" fn k_print(s: *const u8, len: i32) {
 pub unsafe extern "C" fn k_eprint(s: *const u8, len: i32) {
     unsafe {
         let c_str = to_c_str(s, len);
-        fputs(c_str, stderr);
+        fputs(c_str, stderr_ptr());
     }
 }
 
@@ -168,7 +200,7 @@ pub unsafe extern "C" fn k_read_file(path: *const u8, path_len: i32) -> KStrBool
 pub unsafe extern "C" fn k_read_line() -> KStrBool {
     unsafe {
         let mut buf = [0u8; 4096];
-        let result = fgets(buf.as_mut_ptr(), 4096, stdin);
+        let result = fgets(buf.as_mut_ptr(), 4096, stdin_ptr());
         if result.is_null() {
             return KStrBool { ptr: core::ptr::null(), len: 0, ok: 0 };
         }

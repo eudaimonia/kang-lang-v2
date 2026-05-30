@@ -6,6 +6,7 @@ use crate::semantic::KangType;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
+use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetTriple};
 use inkwell::types::BasicType;
 use inkwell::types::BasicTypeEnum;
 use inkwell::types::StructType;
@@ -13,6 +14,7 @@ use inkwell::values::BasicValueEnum;
 use inkwell::values::FunctionValue;
 use inkwell::values::PointerValue;
 use std::collections::HashMap;
+use std::sync::Once;
 
 /// 变量存储信息
 struct VarInfo<'ctx> {
@@ -20,11 +22,22 @@ struct VarInfo<'ctx> {
     ty: KangType,
 }
 
+/// 确保 LLVM native target 已初始化（只执行一次）
+static INIT_TARGET: Once = Once::new();
+
+fn ensure_target_initialized() {
+    INIT_TARGET.call_once(|| {
+        Target::initialize_native(&InitializationConfig::default())
+            .expect("failed to initialize native LLVM target");
+    });
+}
+
 /// 代码生成上下文，封装一次编译所需的所有 LLVM 状态
 pub struct CodeGenContext<'ctx> {
     pub context: &'ctx Context,
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
+    pub target_triple: String,
 
     // 变量作用域栈，每层是 name → (alloca_ptr, type) 的映射
     scopes: Vec<HashMap<String, VarInfo<'ctx>>>,
@@ -39,14 +52,45 @@ pub struct CodeGenContext<'ctx> {
 }
 
 impl<'ctx> CodeGenContext<'ctx> {
-    pub fn new(context: &'ctx Context, module_name: &str) -> Self {
+    pub fn new(context: &'ctx Context, module_name: &str, target_triple: Option<&str>) -> Self {
+        ensure_target_initialized();
+
         let module = context.create_module(module_name);
         let builder = context.create_builder();
+
+        let resolved_triple = match target_triple {
+            Some(t) => {
+                let triple = TargetTriple::create(t);
+                module.set_triple(&triple);
+                t.to_string()
+            }
+            None => {
+                let default_triple = TargetMachine::get_default_triple();
+                module.set_triple(&default_triple);
+                default_triple.as_str().to_str().unwrap_or("unknown").to_string()
+            }
+        };
+
+        // 设置 data layout
+        if let Ok(target) = Target::from_triple(&TargetTriple::create(&resolved_triple)) {
+            if let Some(machine) = target.create_target_machine(
+                &TargetTriple::create(&resolved_triple),
+                "",
+                "",
+                inkwell::OptimizationLevel::Default,
+                inkwell::targets::RelocMode::Default,
+                inkwell::targets::CodeModel::Default,
+            ) {
+                let data_layout = machine.get_target_data().get_data_layout();
+                module.set_data_layout(&data_layout);
+            }
+        }
 
         CodeGenContext {
             context,
             module,
             builder,
+            target_triple: resolved_triple,
             scopes: vec![HashMap::new()],
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
