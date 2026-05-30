@@ -344,18 +344,38 @@ kang build --stats file.kang      # 全量五阶段数据
 
 ---
 
-## 7. 里程碑
+## 7. 里程碑与审查节点
 
-| M# | 名称 | 模块 | LOC | 估时 | 关键交付物 |
-|----|------|------|-----|------|-----------|
-| M1 | 前端 | lexer + parser + AST + stats | 1,600 | 1 周 | `kang lex` / `kang parse` 可运行, Token Stream 和 AST 可序列化 |
-| M2 | 语义 | semantic (types/scope/checker/flow) | 900 | 1 周 | `kang check` 可运行, 17 个测试文件正确分类 |
-| M3 | 运行时 | kangrt (arena/builtins/panic) | 500 | 3-4天 | `libkangrt.a` 可独立编译, 内置函数封装 musl libc, 跨平台可移植 |
-| M4 | 代码生成 | codegen (context/types/expr/stmt/builtins/runtime) | 1,800 | 1.5-2周 | `kang codegen` 输出合法 LLVM IR |
-| M5 | AOT+CLI | main.rs (子命令/--emit/--stats/管线串联) | 300 | 2-3天 | `kang run hello.kang` 端到端 |
-| M6 | REPL | repl.rs (GNU readline/bash快捷键/JIT/符号表持久化) | 500 | 3-4天 | REPL 交互多行输入, `....>` 续行提示, `:quit`/`:show`/`:reset`/`:load` |
-| M7 | 测试 | tests/ (集成测试/边界/README) | 1,000 | 3-4天 | 全部回归通过 |
-| **总计** | | | **~6,600** | **5-6周** |
+本项目采用 **AI 主导实施、人类里程碑审查** 的协作模式。每个里程碑 AI 完成代码+测试后提交，人类审查签字后进入下一阶段。
+
+### 审查流程
+
+```
+AI 实现模块 + 自测 → 提交代码 → 人类审查 → 签字/反馈 → 下一里程碑
+```
+
+- AI 在每个里程碑内同步完成单元测试和语义测试，不设独立测试里程碑
+- 人类审查聚焦：接口契约是否正确、语义覆盖是否完整、代码是否可理解
+- 审查通过则进入下一里程碑；有反馈则 AI 修订后重新提交
+- 单个里程碑如超过 1,500 LOC，建议分两轮提交以降低审查负担
+
+### 里程碑规划
+
+| M# | 名称 | 模块 | LOC | 审查重点 | 关键交付物 |
+|----|------|------|-----|---------|-----------|
+| M1 | 前端 | lexer + parser + AST + stats + error + 10 grammar tests | 1,700 | 词法定义完整、AST 结构合理、语法覆盖所有合法/非法边界 | `kang lex` / `kang parse` 可运行，Token Stream 和 AST 可序列化，10 个正向语法测试通过 |
+| M2 | 语义 | semantic (types/scope/checker/flow) + 7 semantic tests | 1,000 | 46 条语义规则覆盖完整、错误信息清晰有定位、作用域模型正确 | `kang check` 可运行，7 个语义测试文件正确分类（合法通过、非法报错含位置） |
+| M3 | 运行时 | kangrt (arena/builtins/panic) | 500 | C ABI 签名与 SPECS 一致、内存安全无 UB、libc 封装正确 | `libkangrt.a` 独立编译，19 个内置函数功能测试通过 |
+| M4 | 代码生成 | codegen (context/types/expr/stmt/builtins/runtime) | 1,800 | LLVM IR 正确可执行、6 项运行时检查齐全、二值返回打包/解包正确 | `kang codegen` 输出合法 LLVM IR，可通过 `lli` 执行，含运行时安全检查 |
+| M5 | CLI + AOT | main.rs (子命令/--emit/--stats/管线串联/链接) | 400 | CLI 接口一致、管线阶段衔接正确、统计输出完整 | `kang run hello.kang` 端到端编译+执行，`--stats` 输出完整 JSON |
+| M6 | REPL + 集成 | repl.rs + tests/ (端到端集成测试) | 1,200 | REPL 交互流畅、JIT 正确性、符号表跨行持久化 | REPL 交互多行输入，`:quit`/`:show`/`:reset`/`:load`，全部集成测试通过 |
+| **总计** | | | **~6,600** | | |
+
+### 并行化说明
+
+- **M3 (运行时)** 与 M1/M2 无依赖，AI 可并行推进（如 M1+M3 或 M2+M3 同期实施）
+- **M5 和 M6** 在 M4 完成后可并行推进（两者都依赖完整的编译管线）
+- 人类审查仍按里程碑逐一进行，不因 AI 并行而合并审查轮次
 
 ### 依赖图
 
@@ -365,19 +385,22 @@ M1 (前端)
   ▼
 M2 (语义) ──┐
              │
-M3 (运行时) ─┤  ← 可与 M1/M2 并行
+M3 (运行时) ─┤  ← 与 M1/M2 并行
              │
              ▼
           M4 (代码生成)
              │
         ┌────┴────┐
         ▼         ▼
-     M5 (AOT)  M6 (REPL)
-        │         │
-        └────┬────┘
-             ▼
-          M7 (测试)
+     M5 (CLI)  M6 (REPL+集成)
 ```
+
+### 审查节奏
+
+- **AI 实施**: 单个里程碑数小时到 1-2 天（不含人类等待时间）
+- **人类审查**: 每轮建议 1-2 天内完成反馈，避免 AI 上下文因等待过长而冷却
+- **修订轮次**: 审查反馈后 AI 修订通常数小时内完成
+- **整体预期**: 6 个里程碑 × (1-2 天 AI 实施 + 1-2 天人类审查) ≈ 2-4 周日历时间，其中 AI 活跃时间约 3-5 天
 
 ---
 
