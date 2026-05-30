@@ -184,9 +184,9 @@ impl fmt::Display for Expr {
                     for a in rest {
                         write!(f, "{} ", a)?;
                     }
-                    write!(f, "{})", last)?;
+                    write!(f, "{}", last)?;
                 }
-                write!(f, ")")
+                write!(f, "))")
             }
             Expr::Index { array, index } => {
                 write!(f, "(index {} {})", array, index)
@@ -399,5 +399,270 @@ impl fmt::Display for Program {
             write!(f, "\n  {}", item)?;
         }
         write!(f, ")")
+    }
+}
+
+// ── 单元测试 ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Type Display ───────────────────────────────────────────────────
+
+    #[test]
+    fn display_base_i32() {
+        assert_eq!(format!("{}", Type::Base(BaseType::I32)), "(type \"i32\")");
+    }
+
+    #[test]
+    fn display_base_void() {
+        assert_eq!(format!("{}", Type::Base(BaseType::Void)), "(type \"void\")");
+    }
+
+    #[test]
+    fn display_array() {
+        assert_eq!(format!("{}", Type::Array(BaseType::I32)), "(type \"[i32]\")");
+    }
+
+    #[test]
+    fn display_return_type_pair() {
+        let rt = ReturnType::Pair(Type::Base(BaseType::I32), Type::Base(BaseType::Bool));
+        assert_eq!(format!("{}", rt), "((type \"i32\") (type \"bool\"))");
+    }
+
+    // ── Expr Display ───────────────────────────────────────────────────
+
+    #[test]
+    fn display_int_lit() {
+        assert_eq!(format!("{}", Expr::IntLit("42".into())), "(int-lit 42)");
+    }
+
+    #[test]
+    fn display_float_lit() {
+        assert_eq!(format!("{}", Expr::FloatLit("3.14".into())), "(float-lit 3.14)");
+    }
+
+    #[test]
+    fn display_str_lit() {
+        assert_eq!(format!("{}", Expr::StrLit("hello".into())), "(str-lit \"hello\")");
+    }
+
+    #[test]
+    fn display_bool_lit() {
+        assert_eq!(format!("{}", Expr::BoolLit(true)), "(bool-lit true)");
+        assert_eq!(format!("{}", Expr::BoolLit(false)), "(bool-lit false)");
+    }
+
+    #[test]
+    fn display_ident() {
+        assert_eq!(format!("{}", Expr::Ident("main".into())), "main");
+    }
+
+    #[test]
+    fn display_binary_expr() {
+        let e = Expr::Binary {
+            left: Box::new(Expr::Ident("a".into())),
+            op: BinOp::Add,
+            right: Box::new(Expr::IntLit("1".into())),
+        };
+        assert_eq!(format!("{}", e), "(+ a (int-lit 1))");
+    }
+
+    #[test]
+    fn display_unary_expr() {
+        let e = Expr::Unary { op: UnaryOp::Neg, expr: Box::new(Expr::Ident("x".into())) };
+        assert_eq!(format!("{}", e), "(- x)");
+    }
+
+    #[test]
+    fn display_call() {
+        let e = Expr::Call {
+            func: Box::new(Expr::Ident("f".into())),
+            args: vec![Expr::IntLit("1".into()), Expr::IntLit("2".into())],
+        };
+        let s = format!("{}", e);
+        assert!(s.contains("call"), "output: {}", s);
+        assert!(s.contains("int-lit 1"), "output: {}", s);
+    }
+
+    #[test]
+    fn display_call_no_args() {
+        let e = Expr::Call { func: Box::new(Expr::Ident("f".into())), args: vec![] };
+        assert_eq!(format!("{}", e), "(call f args=())");
+    }
+
+    #[test]
+    fn display_index() {
+        let e = Expr::Index {
+            array: Box::new(Expr::Ident("arr".into())),
+            index: Box::new(Expr::IntLit("0".into())),
+        };
+        assert_eq!(format!("{}", e), "(index arr (int-lit 0))");
+    }
+
+    #[test]
+    fn display_field_access() {
+        let e = Expr::FieldAccess {
+            obj: Box::new(Expr::Ident("obj".into())),
+            field: "field".into(),
+        };
+        assert_eq!(format!("{}", e), "(. obj field)");
+    }
+
+    #[test]
+    fn display_array_lit() {
+        let e = Expr::ArrayLit(vec![Expr::IntLit("1".into()), Expr::IntLit("2".into())]);
+        assert_eq!(format!("{}", e), "(array-lit (int-lit 1) (int-lit 2))");
+    }
+
+    #[test]
+    fn display_array_lit_empty() {
+        assert_eq!(format!("{}", Expr::ArrayLit(vec![])), "(array-lit)");
+    }
+
+    #[test]
+    fn display_struct_lit() {
+        let e = Expr::StructLit {
+            name: "Point".into(),
+            fields: vec![("x".into(), Expr::IntLit("1".into()))],
+        };
+        let s = format!("{}", e);
+        assert!(s.contains("struct-lit \"Point\""), "output: {}", s);
+        assert!(s.contains("(x (int-lit 1))"), "output: {}", s);
+    }
+
+    // ── Stmt Display ───────────────────────────────────────────────────
+
+    #[test]
+    fn display_return_void() {
+        assert_eq!(format!("{}", Stmt::Return { values: vec![] }), "(return)");
+    }
+
+    #[test]
+    fn display_return_single() {
+        let s = Stmt::Return { values: vec![Expr::IntLit("0".into())] };
+        assert_eq!(format!("{}", s), "(return (int-lit 0))");
+    }
+
+    #[test]
+    fn display_var_decl() {
+        let s = Stmt::VarDecl {
+            bindings: vec![VarBinding::Named { name: "x".into(), ty: Type::Base(BaseType::I32) }],
+            init: Box::new(Expr::IntLit("42".into())),
+        };
+        let out = format!("{}", s);
+        assert!(out.contains("var-decl"), "output: {}", out);
+        assert!(out.contains("x"), "output: {}", out);
+    }
+
+    #[test]
+    fn display_assign() {
+        let s = Stmt::Assign {
+            lvalue: LValue::Ident("x".into()),
+            value: Box::new(Expr::IntLit("1".into())),
+        };
+        assert_eq!(format!("{}", s), "(assign x (int-lit 1))");
+    }
+
+    #[test]
+    fn display_if_with_else() {
+        let s = Stmt::If {
+            condition: Box::new(Expr::BoolLit(true)),
+            then_branch: Box::new(Stmt::Return { values: vec![] }),
+            else_branch: Some(Box::new(Stmt::Return { values: vec![Expr::IntLit("0".into())] })),
+        };
+        let out = format!("{}", s);
+        assert!(out.contains("(if"), "output: {}", out);
+        assert!(out.contains("(then"), "output: {}", out);
+        assert!(out.contains("(else"), "output: {}", out);
+    }
+
+    #[test]
+    fn display_block_empty() {
+        assert_eq!(format!("{}", Stmt::Block(vec![])), "(block)");
+    }
+
+    // ── TopLevel Display ───────────────────────────────────────────────
+
+    #[test]
+    fn display_struct_def() {
+        let s = StructDef { name: "Point".into(), fields: vec![] };
+        assert_eq!(format!("{}", s), "(struct-def \"Point\")");
+    }
+
+    #[test]
+    fn display_func_def_minimal() {
+        let f = FuncDef {
+            name: "main".into(),
+            params: vec![],
+            return_type: ReturnType::Single(Type::Base(BaseType::I32)),
+            body: vec![],
+        };
+        let out = format!("{}", f);
+        assert!(out.contains("func-def \"main\""), "output: {}", out);
+        assert!(out.contains("(type \"i32\")"), "output: {}", out);
+    }
+
+    #[test]
+    fn display_program_empty() {
+        assert_eq!(format!("{}", Program { items: vec![] }), "(program)");
+    }
+
+    #[test]
+    fn display_program_with_items() {
+        let p = Program {
+            items: vec![
+                TopLevel::Struct(StructDef { name: "A".into(), fields: vec![] }),
+            ],
+        };
+        let out = format!("{}", p);
+        assert!(out.contains("(program"), "output: {}", out);
+        assert!(out.contains("struct-def"), "output: {}", out);
+    }
+
+    // ── VarBinding Display ─────────────────────────────────────────────
+
+    #[test]
+    fn display_var_binding_named() {
+        let v = VarBinding::Named { name: "x".into(), ty: Type::Base(BaseType::I32) };
+        assert_eq!(format!("{}", v), "(x (type \"i32\"))");
+    }
+
+    #[test]
+    fn display_var_binding_discard() {
+        assert_eq!(format!("{}", VarBinding::Discard), "_");
+    }
+
+    // ── LValue Display ─────────────────────────────────────────────────
+
+    #[test]
+    fn display_lvalue_ident() {
+        assert_eq!(format!("{}", LValue::Ident("x".into())), "x");
+    }
+
+    #[test]
+    fn display_lvalue_index() {
+        let l = LValue::Index {
+            array: Box::new(Expr::Ident("arr".into())),
+            index: Box::new(Expr::IntLit("0".into())),
+        };
+        assert_eq!(format!("{}", l), "(lvalue-index arr (int-lit 0))");
+    }
+
+    #[test]
+    fn display_lvalue_field() {
+        let l = LValue::FieldAccess {
+            obj: Box::new(Expr::Ident("obj".into())),
+            field: "f".into(),
+        };
+        assert_eq!(format!("{}", l), "(lvalue-field obj f)");
+    }
+
+    // ── BaseType Display ───────────────────────────────────────────────
+
+    #[test]
+    fn display_basetype_user() {
+        assert_eq!(format!("{}", BaseType::UserDef("MyType".into())), "MyType");
     }
 }

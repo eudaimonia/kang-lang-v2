@@ -780,3 +780,778 @@ pub fn parse(tokens: &[Token], stats: &mut ParseStats) -> Result<Program, ParseE
 
     Ok(program)
 }
+
+// ── 单元测试 ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::{self, LexStats};
+    use std::collections::HashMap;
+
+    /// 辅助: 源码 → AST
+    fn parse_source(source: &str) -> Result<Program, ParseError> {
+        let mut lex_stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let tokens = lexer::tokenize(source, &mut lex_stats).unwrap();
+        let mut stats = ParseStats {
+            duration_us: 0, ast_node_count: 0, ast_max_depth: 0,
+            node_counts_by_kind: HashMap::new(), func_count: 0, struct_count: 0,
+        };
+        parse(&tokens, &mut stats)
+    }
+
+    /// 辅助: 源码 → 单条语句
+    fn parse_stmt(source: &str) -> Result<Stmt, ParseError> {
+        // 包裹成一个函数体以便解析
+        let full = format!("def _test() -> void {{ {} }}", source);
+        let program = parse_source(&full)?;
+        match &program.items[0] {
+            TopLevel::Func(f) => Ok(f.body[0].clone()),
+            _ => unreachable!(),
+        }
+    }
+
+    /// 辅助: 源码 → 表达式
+    fn parse_expr(source: &str) -> Result<Expr, ParseError> {
+        // 放在 return 语句中解析
+        let full = format!("def _test() -> i32 {{ return {}; }}", source);
+        let program = parse_source(&full)?;
+        match &program.items[0] {
+            TopLevel::Func(f) => match &f.body[0] {
+                Stmt::Return { values } => Ok(values[0].clone()),
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    // ── 类型解析 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_base_i32() {
+        let p = parse_source("def f() -> i32 { return 0; }").unwrap();
+        let f = match &p.items[0] { TopLevel::Func(f) => f, _ => unreachable!() };
+        assert_eq!(f.return_type, ReturnType::Single(Type::Base(BaseType::I32)));
+    }
+
+    #[test]
+    fn parse_base_f64() {
+        let p = parse_source("def f() -> f64 { return 0.0; }").unwrap();
+        let f = match &p.items[0] { TopLevel::Func(f) => f, _ => unreachable!() };
+        assert_eq!(f.return_type, ReturnType::Single(Type::Base(BaseType::F64)));
+    }
+
+    #[test]
+    fn parse_type_array() {
+        let p = parse_source("def f(a:[i32]) -> void { return; }").unwrap();
+        let f = match &p.items[0] { TopLevel::Func(f) => f, _ => unreachable!() };
+        assert_eq!(f.params[0].1, Type::Array(BaseType::I32));
+    }
+
+    #[test]
+    fn parse_ret_type_pair() {
+        let p = parse_source("def f() -> (i32, bool) { return 1, true; }").unwrap();
+        let f = match &p.items[0] { TopLevel::Func(f) => f, _ => unreachable!() };
+        assert_eq!(
+            f.return_type,
+            ReturnType::Pair(Type::Base(BaseType::I32), Type::Base(BaseType::Bool))
+        );
+    }
+
+    #[test]
+    fn parse_user_type() {
+        let p = parse_source("def f(x:MyType) -> void { return; }").unwrap();
+        let f = match &p.items[0] { TopLevel::Func(f) => f, _ => unreachable!() };
+        assert_eq!(f.params[0].1, Type::Base(BaseType::UserDef("MyType".into())));
+    }
+
+    // ── 表达式: 字面量 ───────────────────────────────────────────────────
+
+    #[test] fn expr_int_lit()    { assert_eq!(parse_expr("42").unwrap(), Expr::IntLit("42".into())); }
+    #[test] fn expr_float_lit()  { assert_eq!(parse_expr("3.14").unwrap(), Expr::FloatLit("3.14".into())); }
+    #[test] fn expr_str_lit()    { assert_eq!(parse_expr("\"hi\"").unwrap(), Expr::StrLit("hi".into())); }
+    #[test] fn expr_true()       { assert_eq!(parse_expr("true").unwrap(), Expr::BoolLit(true)); }
+    #[test] fn expr_false()      { assert_eq!(parse_expr("false").unwrap(), Expr::BoolLit(false)); }
+    #[test] fn expr_ident()      { assert_eq!(parse_expr("x").unwrap(), Expr::Ident("x".into())); }
+
+    // ── 表达式: 二元运算符(优先级) ────────────────────────────────────────
+
+    #[test]
+    fn expr_binary_add() {
+        assert_eq!(
+            parse_expr("a + b").unwrap(),
+            Expr::Binary {
+                left: Box::new(Expr::Ident("a".into())),
+                op: BinOp::Add,
+                right: Box::new(Expr::Ident("b".into())),
+            }
+        );
+    }
+
+    #[test]
+    fn expr_binary_sub_mul_precedence() {
+        // a + b * c  ≡  a + (b * c)
+        let e = parse_expr("a + b * c").unwrap();
+        assert_eq!(
+            e,
+            Expr::Binary {
+                left: Box::new(Expr::Ident("a".into())),
+                op: BinOp::Add,
+                right: Box::new(Expr::Binary {
+                    left: Box::new(Expr::Ident("b".into())),
+                    op: BinOp::Mul,
+                    right: Box::new(Expr::Ident("c".into())),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn expr_mul_before_add() {
+        // a * b + c  ≡  (a * b) + c
+        let e = parse_expr("a * b + c").unwrap();
+        assert_eq!(
+            e,
+            Expr::Binary {
+                left: Box::new(Expr::Binary {
+                    left: Box::new(Expr::Ident("a".into())),
+                    op: BinOp::Mul,
+                    right: Box::new(Expr::Ident("b".into())),
+                }),
+                op: BinOp::Add,
+                right: Box::new(Expr::Ident("c".into())),
+            }
+        );
+    }
+
+    #[test]
+    fn expr_paren_overrides_precedence() {
+        // (a + b) * c  — 不同于 a + b * c
+        let e = parse_expr("(a + b) * c").unwrap();
+        assert_eq!(
+            e,
+            Expr::Binary {
+                left: Box::new(Expr::Binary {
+                    left: Box::new(Expr::Ident("a".into())),
+                    op: BinOp::Add,
+                    right: Box::new(Expr::Ident("b".into())),
+                }),
+                op: BinOp::Mul,
+                right: Box::new(Expr::Ident("c".into())),
+            }
+        );
+    }
+
+    #[test]
+    fn expr_cmp_before_eq() {
+        // a < b == true  ≡  (a < b) == true
+        let e = parse_expr("a < b == true").unwrap();
+        assert_eq!(e, Expr::Binary {
+            left: Box::new(Expr::Binary {
+                left: Box::new(Expr::Ident("a".into())),
+                op: BinOp::Lt,
+                right: Box::new(Expr::Ident("b".into())),
+            }),
+            op: BinOp::Eq,
+            right: Box::new(Expr::BoolLit(true)),
+        });
+    }
+
+    #[test]
+    fn expr_or_below_and() {
+        // x || y && false  ≡  x || (y && false)
+        let e = parse_expr("x || y && false").unwrap();
+        assert_eq!(e, Expr::Binary {
+            left: Box::new(Expr::Ident("x".into())),
+            op: BinOp::Or,
+            right: Box::new(Expr::Binary {
+                left: Box::new(Expr::Ident("y".into())),
+                op: BinOp::And,
+                right: Box::new(Expr::BoolLit(false)),
+            }),
+        });
+    }
+
+    #[test]
+    fn expr_comparison_chain() {
+        // a < b < c  ≡  (a < b) < c  (左结合)
+        let e = parse_expr("a < b < c").unwrap();
+        match e {
+            Expr::Binary { left, op: BinOp::Lt, right } => {
+                assert_eq!(*left, Expr::Binary {
+                    left: Box::new(Expr::Ident("a".into())),
+                    op: BinOp::Lt,
+                    right: Box::new(Expr::Ident("b".into())),
+                });
+                assert_eq!(*right, Expr::Ident("c".into()));
+            }
+            _ => panic!("expected binary"),
+        }
+    }
+
+    // ── 表达式: 一元运算符 ────────────────────────────────────────────────
+
+    #[test]
+    fn expr_neg() {
+        assert_eq!(
+            parse_expr("-a").unwrap(),
+            Expr::Unary { op: UnaryOp::Neg, expr: Box::new(Expr::Ident("a".into())) }
+        );
+    }
+
+    #[test]
+    fn expr_not() {
+        assert_eq!(
+            parse_expr("!x").unwrap(),
+            Expr::Unary { op: UnaryOp::Not, expr: Box::new(Expr::Ident("x".into())) }
+        );
+    }
+
+    #[test]
+    fn expr_double_neg() {
+        assert_eq!(
+            parse_expr("--42").unwrap(),
+            Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(Expr::Unary {
+                    op: UnaryOp::Neg,
+                    expr: Box::new(Expr::IntLit("42".into())),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn expr_neg_mul_precedence() {
+        // -a * b  ≡  (-a) * b
+        let e = parse_expr("-a * b").unwrap();
+        assert_eq!(e, Expr::Binary {
+            left: Box::new(Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(Expr::Ident("a".into())),
+            }),
+            op: BinOp::Mul,
+            right: Box::new(Expr::Ident("b".into())),
+        });
+    }
+
+    // ── 表达式: 后缀操作 ─────────────────────────────────────────────────
+
+    #[test]
+    fn expr_call_no_args() {
+        assert_eq!(
+            parse_expr("f()").unwrap(),
+            Expr::Call { func: Box::new(Expr::Ident("f".into())), args: vec![] }
+        );
+    }
+
+    #[test]
+    fn expr_call_one_arg() {
+        assert_eq!(
+            parse_expr("f(1)").unwrap(),
+            Expr::Call {
+                func: Box::new(Expr::Ident("f".into())),
+                args: vec![Expr::IntLit("1".into())],
+            }
+        );
+    }
+
+    #[test]
+    fn expr_call_multi_args() {
+        let e = parse_expr("add(1, 2, 3)").unwrap();
+        match e {
+            Expr::Call { func, args } => {
+                assert_eq!(*func, Expr::Ident("add".into()));
+                assert_eq!(args.len(), 3);
+            }
+            _ => panic!("expected call"),
+        }
+    }
+
+    #[test]
+    fn expr_index() {
+        assert_eq!(
+            parse_expr("arr[0]").unwrap(),
+            Expr::Index {
+                array: Box::new(Expr::Ident("arr".into())),
+                index: Box::new(Expr::IntLit("0".into())),
+            }
+        );
+    }
+
+    #[test]
+    fn expr_field_access() {
+        assert_eq!(
+            parse_expr("obj.field").unwrap(),
+            Expr::FieldAccess {
+                obj: Box::new(Expr::Ident("obj".into())),
+                field: "field".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn expr_chained_field_access() {
+        // a.b.c
+        let e = parse_expr("a.b.c").unwrap();
+        assert_eq!(e, Expr::FieldAccess {
+            obj: Box::new(Expr::FieldAccess {
+                obj: Box::new(Expr::Ident("a".into())),
+                field: "b".into(),
+            }),
+            field: "c".into(),
+        });
+    }
+
+    #[test]
+    fn expr_call_chained() {
+        // f().g(1).h
+        let e = parse_expr("f().g(1).h").unwrap();
+        assert_eq!(e, Expr::FieldAccess {
+            obj: Box::new(Expr::Call {
+                func: Box::new(Expr::FieldAccess {
+                    obj: Box::new(Expr::Call {
+                        func: Box::new(Expr::Ident("f".into())),
+                        args: vec![],
+                    }),
+                    field: "g".into(),
+                }),
+                args: vec![Expr::IntLit("1".into())],
+            }),
+            field: "h".into(),
+        });
+    }
+
+    // ── 表达式: 数组/结构体字面量 ─────────────────────────────────────────
+
+    #[test]
+    fn expr_array_lit_empty() {
+        assert_eq!(parse_expr("[]").unwrap(), Expr::ArrayLit(vec![]));
+    }
+
+    #[test]
+    fn expr_array_lit_elements() {
+        let e = parse_expr("[1, 2, 3]").unwrap();
+        match e {
+            Expr::ArrayLit(elems) => assert_eq!(elems.len(), 3),
+            _ => panic!("expected array lit"),
+        }
+    }
+
+    #[test]
+    fn expr_struct_lit_empty() {
+        let e = parse_expr("Point{}").unwrap();
+        match e {
+            Expr::StructLit { name, fields } => {
+                assert_eq!(name, "Point");
+                assert!(fields.is_empty());
+            }
+            _ => panic!("expected struct lit"),
+        }
+    }
+
+    #[test]
+    fn expr_struct_lit_with_fields() {
+        let e = parse_expr("Point{x: 1, y: 2}").unwrap();
+        match e {
+            Expr::StructLit { name, fields } => {
+                assert_eq!(name, "Point");
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].0, "x");
+                assert_eq!(fields[1].0, "y");
+            }
+            _ => panic!("expected struct lit"),
+        }
+    }
+
+    // ── 语句解析 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn stmt_var_decl_single() {
+        let s = parse_stmt("var x:i32 = 42;").unwrap();
+        match s {
+            Stmt::VarDecl { bindings, init } => {
+                assert_eq!(bindings.len(), 1);
+                assert_eq!(bindings[0], VarBinding::Named { name: "x".into(), ty: Type::Base(BaseType::I32) });
+                assert_eq!(*init, Expr::IntLit("42".into()));
+            }
+            _ => panic!("expected var decl"),
+        }
+    }
+
+    #[test]
+    fn stmt_var_decl_double() {
+        let s = parse_stmt("var a:i32, b:i32 = f();").unwrap();
+        match s {
+            Stmt::VarDecl { bindings, init: _ } => {
+                assert_eq!(bindings.len(), 2);
+                assert_eq!(bindings[0], VarBinding::Named { name: "a".into(), ty: Type::Base(BaseType::I32) });
+                assert_eq!(bindings[1], VarBinding::Named { name: "b".into(), ty: Type::Base(BaseType::I32) });
+            }
+            _ => panic!("expected var decl"),
+        }
+    }
+
+    #[test]
+    fn stmt_var_decl_discard() {
+        let s = parse_stmt("var _, r:i32 = f();").unwrap();
+        match s {
+            Stmt::VarDecl { bindings, .. } => {
+                assert_eq!(bindings.len(), 2);
+                assert_eq!(bindings[0], VarBinding::Discard);
+            }
+            _ => panic!("expected var decl"),
+        }
+    }
+
+    #[test]
+    fn stmt_assign() {
+        let s = parse_stmt("x = 42;").unwrap();
+        match s {
+            Stmt::Assign { lvalue, value } => {
+                assert_eq!(lvalue, LValue::Ident("x".into()));
+                assert_eq!(*value, Expr::IntLit("42".into()));
+            }
+            _ => panic!("expected assign"),
+        }
+    }
+
+    #[test]
+    fn stmt_assign_index() {
+        let s = parse_stmt("arr[i] = 5;").unwrap();
+        match s {
+            Stmt::Assign { lvalue, .. } => {
+                assert_eq!(lvalue, LValue::Index {
+                    array: Box::new(Expr::Ident("arr".into())),
+                    index: Box::new(Expr::Ident("i".into())),
+                });
+            }
+            _ => panic!("expected assign"),
+        }
+    }
+
+    #[test]
+    fn stmt_assign_field() {
+        let s = parse_stmt("obj.field = 5;").unwrap();
+        match s {
+            Stmt::Assign { lvalue, .. } => {
+                assert_eq!(lvalue, LValue::FieldAccess {
+                    obj: Box::new(Expr::Ident("obj".into())),
+                    field: "field".into(),
+                });
+            }
+            _ => panic!("expected assign"),
+        }
+    }
+
+    #[test]
+    fn stmt_return_void() {
+        let s = parse_stmt("return;").unwrap();
+        assert_eq!(s, Stmt::Return { values: vec![] });
+    }
+
+    #[test]
+    fn stmt_return_single() {
+        let s = parse_stmt("return 0;").unwrap();
+        assert_eq!(s, Stmt::Return { values: vec![Expr::IntLit("0".into())] });
+    }
+
+    #[test]
+    fn stmt_return_pair() {
+        let s = parse_stmt("return 1, true;").unwrap();
+        assert_eq!(s, Stmt::Return {
+            values: vec![Expr::IntLit("1".into()), Expr::BoolLit(true)],
+        });
+    }
+
+    #[test]
+    fn stmt_if_simple() {
+        let s = parse_stmt("if x then return;").unwrap();
+        match s {
+            Stmt::If { condition, then_branch, else_branch } => {
+                assert_eq!(*condition, Expr::Ident("x".into()));
+                assert_eq!(*then_branch, Stmt::Return { values: vec![] });
+                assert!(else_branch.is_none());
+            }
+            _ => panic!("expected if"),
+        }
+    }
+
+    #[test]
+    fn stmt_if_else() {
+        let s = parse_stmt("if x then return 0; else return 1;").unwrap();
+        match s {
+            Stmt::If { condition, then_branch: _, else_branch } => {
+                assert_eq!(*condition, Expr::Ident("x".into()));
+                assert!(else_branch.is_some());
+            }
+            _ => panic!("expected if"),
+        }
+    }
+
+    #[test]
+    fn stmt_block_empty() {
+        let s = parse_stmt("{}").unwrap();
+        assert_eq!(s, Stmt::Block(vec![]));
+    }
+
+    #[test]
+    fn stmt_block_multiple() {
+        let s = parse_stmt("{ return; return 1; }").unwrap();
+        match s {
+            Stmt::Block(stmts) => assert_eq!(stmts.len(), 2),
+            _ => panic!("expected block"),
+        }
+    }
+
+    #[test]
+    fn stmt_expr_stmt() {
+        let s = parse_stmt("puts(\"hi\");").unwrap();
+        match s {
+            Stmt::Expr(_) => {} // 仅验证解析不报错
+            _ => panic!("expected expr stmt"),
+        }
+    }
+
+    #[test]
+    fn stmt_for_loop() {
+        let source = "for var i:i32 = 0, i < 10, i = i + 1 in { }";
+        let s = parse_stmt(source).unwrap();
+        match s {
+            Stmt::For { var_name, var_type, start, end, step_lvalue, step_expr: _, body } => {
+                assert_eq!(var_name, "i");
+                assert_eq!(var_type, Type::Base(BaseType::I32));
+                assert_eq!(*start, Expr::IntLit("0".into()));
+                assert_eq!(*end, Expr::Binary {
+                    left: Box::new(Expr::Ident("i".into())),
+                    op: BinOp::Lt,
+                    right: Box::new(Expr::IntLit("10".into())),
+                });
+                assert_eq!(step_lvalue, LValue::Ident("i".into()));
+                assert_eq!(*body, Stmt::Block(vec![]));
+            }
+            _ => panic!("expected for"),
+        }
+    }
+
+    // ── 顶层解析 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn top_struct_def() {
+        let p = parse_source("struct Point { x: i32; y: i32; }").unwrap();
+        assert_eq!(p.items.len(), 1);
+        match &p.items[0] {
+            TopLevel::Struct(s) => {
+                assert_eq!(s.name, "Point");
+                assert_eq!(s.fields.len(), 2);
+                assert_eq!(s.fields[0].0, "x");
+            }
+            _ => panic!("expected struct"),
+        }
+    }
+
+    #[test]
+    fn top_func_def() {
+        let p = parse_source("def main() -> i32 { return 0; }").unwrap();
+        assert_eq!(p.items.len(), 1);
+        match &p.items[0] {
+            TopLevel::Func(f) => {
+                assert_eq!(f.name, "main");
+                assert!(f.params.is_empty());
+                assert_eq!(f.return_type, ReturnType::Single(Type::Base(BaseType::I32)));
+            }
+            _ => panic!("expected func"),
+        }
+    }
+
+    #[test]
+    fn top_func_with_params() {
+        let p = parse_source("def add(a:i32, b:i32) -> i32 { return a + b; }").unwrap();
+        match &p.items[0] {
+            TopLevel::Func(f) => {
+                assert_eq!(f.params.len(), 2);
+                assert_eq!(f.params[0].0, "a");
+                assert_eq!(f.params[1].0, "b");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn top_multiple_items() {
+        let p = parse_source("struct A {} def f() -> void { return; } struct B {}").unwrap();
+        assert_eq!(p.items.len(), 3);
+    }
+
+    // ── 嵌套结构 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn nested_blocks() {
+        let p = parse_source("def f() -> i32 { { { return 1; } } }").unwrap();
+        match &p.items[0] {
+            TopLevel::Func(f) => {
+                match &f.body[0] {
+                    Stmt::Block(outer) => {
+                        match &outer[0] {
+                            Stmt::Block(inner) => {
+                                assert!(matches!(inner[0], Stmt::Return { .. }));
+                            }
+                            _ => panic!("expected inner block"),
+                        }
+                    }
+                    _ => panic!("expected outer block"),
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn if_in_if() {
+        let s = parse_stmt("if x then if y then return 0; else return 1;").unwrap();
+        match s {
+            Stmt::If { then_branch, .. } => {
+                assert!(matches!(*then_branch, Stmt::If { .. }));
+            }
+            _ => panic!("expected if"),
+        }
+    }
+
+    // ── 边界情况 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_program() {
+        let p = parse_source("").unwrap();
+        assert!(p.items.is_empty());
+    }
+
+    #[test]
+    fn empty_struct() {
+        let p = parse_source("struct Empty {}").unwrap();
+        match &p.items[0] {
+            TopLevel::Struct(s) => assert!(s.fields.is_empty()),
+            _ => panic!("expected struct"),
+        }
+    }
+
+    #[test]
+    fn func_no_params() {
+        let p = parse_source("def f() -> void { return; }").unwrap();
+        match &p.items[0] {
+            TopLevel::Func(f) => assert!(f.params.is_empty()),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn expr_int_negative() {
+        // -1 是一元负号作用于 1
+        let e = parse_expr("-1").unwrap();
+        assert_eq!(e, Expr::Unary { op: UnaryOp::Neg, expr: Box::new(Expr::IntLit("1".into())) });
+    }
+
+    // ── 错误路径 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn error_missing_semicolon() {
+        // return x } — x 是合法表达式, 但缺少分号
+        let result = parse_source("def f() -> i32 { return x }");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.msg.contains("期望 Semi"), "msg: {}", err.msg);
+    }
+
+    #[test]
+    fn error_unexpected_token_at_top() {
+        let result = parse_source("42");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().msg.contains("struct 或 def"));
+    }
+
+    #[test]
+    fn error_missing_rparen() {
+        let result = parse_source("def f( -> void { return; }");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn error_wrong_close() {
+        let result = parse_source("def f() -> void { return; ]");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn error_bad_assignment_target() {
+        // 42 = x; — 语法层会将 42 解析为表达式, 转左值时失败
+        let result = parse_stmt("42 = x;");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().msg.contains("赋值左侧"));
+    }
+
+    #[test]
+    fn error_unterminated_block() {
+        let result = parse_source("def f() -> void { return;");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn error_missing_arrow() {
+        let result = parse_source("def f() i32 { return 0; }");
+        assert!(result.is_err());
+    }
+
+    // ── 统计 ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn stats_func_count() {
+        let source = "def f() -> void { return; } def g() -> i32 { return 0; }";
+        let mut lex_stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let tokens = lexer::tokenize(source, &mut lex_stats).unwrap();
+        let mut stats = ParseStats {
+            duration_us: 0, ast_node_count: 0, ast_max_depth: 0,
+            node_counts_by_kind: HashMap::new(), func_count: 0, struct_count: 0,
+        };
+        parse(&tokens, &mut stats).unwrap();
+        assert_eq!(stats.func_count, 2);
+        assert_eq!(stats.struct_count, 0);
+    }
+
+    #[test]
+    fn stats_struct_count() {
+        let source = "struct A { x: i32; } struct B { y: f64; }";
+        let mut lex_stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let tokens = lexer::tokenize(source, &mut lex_stats).unwrap();
+        let mut stats = ParseStats {
+            duration_us: 0, ast_node_count: 0, ast_max_depth: 0,
+            node_counts_by_kind: HashMap::new(), func_count: 0, struct_count: 0,
+        };
+        parse(&tokens, &mut stats).unwrap();
+        assert_eq!(stats.struct_count, 2);
+        assert_eq!(stats.func_count, 0);
+    }
+
+    #[test]
+    fn stats_depth_for_nested() {
+        let source = "def f() -> i32 { { { return 1; } } }";
+        let mut lex_stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let tokens = lexer::tokenize(source, &mut lex_stats).unwrap();
+        let mut stats = ParseStats {
+            duration_us: 0, ast_node_count: 0, ast_max_depth: 0,
+            node_counts_by_kind: HashMap::new(), func_count: 0, struct_count: 0,
+        };
+        parse(&tokens, &mut stats).unwrap();
+        assert!(stats.ast_max_depth >= 5); // program → func-def → block → block → block → return
+    }
+}

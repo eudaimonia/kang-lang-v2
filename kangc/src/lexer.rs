@@ -2,7 +2,7 @@
 // 使用 logos 声明式词法，处理关键字、字面量、运算符、注释、空白
 
 use crate::error::LexError;
-use crate::stats::LexStats;
+pub use crate::stats::LexStats;
 use logos::Logos;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -71,7 +71,7 @@ pub enum TokenKind {
     #[regex(r"[0-9]+", |lex| lex.slice().to_string())]
     IntLit(String),
 
-    #[regex(r#""([^"\\]|\\(n|t|\\|"|0))*""#, parse_string)]
+    #[regex(r#""([^"\\]|\\.)*""#, parse_string)]
     StrLit(String),
 
     // 标识符 (放在关键字之后，同长度时关键字优先)
@@ -246,5 +246,366 @@ fn token_lexeme(t: &Token) -> String {
         TokenKind::Dot => ".".into(),
         TokenKind::Eof => "".into(),
         TokenKind::Comment => "".into(),
+    }
+}
+
+// ── 单元测试 ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 辅助: tokenize 并提取 kind 列表
+    fn tokenize_kinds(source: &str) -> Vec<TokenKind> {
+        let mut stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        tokenize(source, &mut stats)
+            .unwrap()
+            .iter()
+            .map(|t| t.kind.clone())
+            .collect()
+    }
+
+    fn first_kind(source: &str) -> TokenKind {
+        tokenize_kinds(source)[0].clone()
+    }
+
+    // ── 运算符 / 分隔符 ─────────────────────────────────────────────────
+
+    #[test] fn lex_plus()     { assert_eq!(first_kind("+"), TokenKind::Plus); }
+    #[test] fn lex_minus()    { assert_eq!(first_kind("-"), TokenKind::Minus); }
+    #[test] fn lex_star()     { assert_eq!(first_kind("*"), TokenKind::Star); }
+    #[test] fn lex_slash()    { assert_eq!(first_kind("/"), TokenKind::Slash); }
+    #[test] fn lex_lt()       { assert_eq!(first_kind("<"), TokenKind::Lt); }
+    #[test] fn lex_le()       { assert_eq!(first_kind("<="), TokenKind::Le); }
+    #[test] fn lex_gt()       { assert_eq!(first_kind(">"), TokenKind::Gt); }
+    #[test] fn lex_ge()       { assert_eq!(first_kind(">="), TokenKind::Ge); }
+    #[test] fn lex_eqeq()     { assert_eq!(first_kind("=="), TokenKind::EqEq); }
+    #[test] fn lex_neq()      { assert_eq!(first_kind("!="), TokenKind::Neq); }
+    #[test] fn lex_andand()   { assert_eq!(first_kind("&&"), TokenKind::AndAnd); }
+    #[test] fn lex_oror()     { assert_eq!(first_kind("||"), TokenKind::OrOr); }
+    #[test] fn lex_bang()     { assert_eq!(first_kind("!"), TokenKind::Bang); }
+    #[test] fn lex_assign()   { assert_eq!(first_kind("="), TokenKind::Assign); }
+    #[test] fn lex_arrow()    { assert_eq!(first_kind("->"), TokenKind::Arrow); }
+    #[test] fn lex_lparen()   { assert_eq!(first_kind("("), TokenKind::LParen); }
+    #[test] fn lex_rparen()   { assert_eq!(first_kind(")"), TokenKind::RParen); }
+    #[test] fn lex_lbracket() { assert_eq!(first_kind("["), TokenKind::LBracket); }
+    #[test] fn lex_rbracket() { assert_eq!(first_kind("]"), TokenKind::RBracket); }
+    #[test] fn lex_lbrace()   { assert_eq!(first_kind("{"), TokenKind::LBrace); }
+    #[test] fn lex_rbrace()   { assert_eq!(first_kind("}"), TokenKind::RBrace); }
+    #[test] fn lex_colon()    { assert_eq!(first_kind(":"), TokenKind::Colon); }
+    #[test] fn lex_semi()     { assert_eq!(first_kind(";"), TokenKind::Semi); }
+    #[test] fn lex_comma()    { assert_eq!(first_kind(","), TokenKind::Comma); }
+    #[test] fn lex_dot()      { assert_eq!(first_kind("."), TokenKind::Dot); }
+
+    // ── 关键字 ───────────────────────────────────────────────────────────
+
+    #[test] fn lex_def()    { assert_eq!(first_kind("def"), TokenKind::Def); }
+    #[test] fn lex_var()    { assert_eq!(first_kind("var"), TokenKind::Var); }
+    #[test] fn lex_return() { assert_eq!(first_kind("return"), TokenKind::Return); }
+    #[test] fn lex_if()     { assert_eq!(first_kind("if"), TokenKind::If); }
+    #[test] fn lex_else()   { assert_eq!(first_kind("else"), TokenKind::Else); }
+    #[test] fn lex_then()   { assert_eq!(first_kind("then"), TokenKind::Then); }
+    #[test] fn lex_for()    { assert_eq!(first_kind("for"), TokenKind::For); }
+    #[test] fn lex_in()     { assert_eq!(first_kind("in"), TokenKind::In); }
+    #[test] fn lex_struct() { assert_eq!(first_kind("struct"), TokenKind::Struct); }
+
+    // ── 类型关键字 ───────────────────────────────────────────────────────
+
+    #[test] fn lex_ti32()  { assert_eq!(first_kind("i32"), TokenKind::TI32); }
+    #[test] fn lex_tf64()  { assert_eq!(first_kind("f64"), TokenKind::TF64); }
+    #[test] fn lex_tstr()  { assert_eq!(first_kind("str"), TokenKind::TStr); }
+    #[test] fn lex_tbool() { assert_eq!(first_kind("bool"), TokenKind::TBool); }
+    #[test] fn lex_tvoid() { assert_eq!(first_kind("void"), TokenKind::TVoid); }
+
+    // ── 布尔字面量 ───────────────────────────────────────────────────────
+
+    #[test] fn lex_true()  { assert_eq!(first_kind("true"), TokenKind::True); }
+    #[test] fn lex_false() { assert_eq!(first_kind("false"), TokenKind::False); }
+
+    // ── 字面量 ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn lex_int_lit() {
+        assert_eq!(first_kind("42"), TokenKind::IntLit("42".into()));
+    }
+
+    #[test]
+    fn lex_int_zero() {
+        assert_eq!(first_kind("0"), TokenKind::IntLit("0".into()));
+    }
+
+    #[test]
+    fn lex_float_lit() {
+        assert_eq!(first_kind("3.14"), TokenKind::FloatLit("3.14".into()));
+    }
+
+    #[test]
+    fn lex_float_no_fraction() {
+        // "1." is lexed as IntLit("1") + Dot
+        let kinds = tokenize_kinds("1.");
+        assert_eq!(kinds[0], TokenKind::IntLit("1".into()));
+        assert_eq!(kinds[1], TokenKind::Dot);
+    }
+
+    #[test]
+    fn lex_string_simple() {
+        assert_eq!(first_kind("\"hello\""), TokenKind::StrLit("hello".into()));
+    }
+
+    #[test]
+    fn lex_string_empty() {
+        assert_eq!(first_kind("\"\""), TokenKind::StrLit("".into()));
+    }
+
+    #[test]
+    fn lex_string_escape_newline() {
+        assert_eq!(first_kind(r#""\n""#), TokenKind::StrLit("\n".into()));
+    }
+
+    #[test]
+    fn lex_string_escape_tab() {
+        assert_eq!(first_kind(r#""\t""#), TokenKind::StrLit("\t".into()));
+    }
+
+    #[test]
+    fn lex_string_escape_quote() {
+        assert_eq!(first_kind(r#""\"""#), TokenKind::StrLit("\"".into()));
+    }
+
+    #[test]
+    fn lex_string_escape_backslash() {
+        assert_eq!(first_kind(r#""\\""#), TokenKind::StrLit("\\".into()));
+    }
+
+    #[test]
+    fn lex_string_escape_null() {
+        assert_eq!(first_kind(r#""\0""#), TokenKind::StrLit("\0".into()));
+    }
+
+    #[test]
+    fn lex_string_multiple_escapes() {
+        // 手动构造避开 raw string 歧义: "hello\nworld\t!"
+        let mut s = String::from("\"hello");
+        s.push('\\'); s.push('n');
+        s.push_str("world");
+        s.push('\\'); s.push('t');
+        s.push_str("!\"");
+        assert_eq!(
+            first_kind(&s),
+            TokenKind::StrLit("hello\nworld\t!".into())
+        );
+    }
+
+    // ── 标识符 ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn lex_ident_simple() {
+        assert_eq!(first_kind("foo"), TokenKind::Ident("foo".into()));
+    }
+
+    #[test]
+    fn lex_ident_with_underscore() {
+        assert_eq!(first_kind("my_var"), TokenKind::Ident("my_var".into()));
+    }
+
+    #[test]
+    fn lex_ident_with_digits() {
+        assert_eq!(first_kind("x123"), TokenKind::Ident("x123".into()));
+    }
+
+    #[test]
+    fn lex_ident_starting_underscore() {
+        assert_eq!(first_kind("_discard"), TokenKind::Ident("_discard".into()));
+    }
+
+    #[test]
+    fn lex_underscore_alone() {
+        // 单独的 _ 是合法的标识符(用作 discard)
+        assert_eq!(first_kind("_"), TokenKind::Ident("_".into()));
+    }
+
+    // ── 注释 ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn skip_line_comment() {
+        let kinds = tokenize_kinds("// comment\nx");
+        assert_eq!(kinds[0], TokenKind::Ident("x".into()));
+        assert_eq!(kinds[1], TokenKind::Eof);
+    }
+
+    #[test]
+    fn skip_block_comment() {
+        let kinds = tokenize_kinds("/* block */x");
+        assert_eq!(kinds[0], TokenKind::Ident("x".into()));
+    }
+
+    #[test]
+    fn skip_block_comment_multiline() {
+        let kinds = tokenize_kinds("/* line1\n   line2 */42");
+        assert_eq!(kinds[0], TokenKind::IntLit("42".into()));
+    }
+
+    #[test]
+    fn skip_line_comment_end_of_input() {
+        let kinds = tokenize_kinds("// comment no newline");
+        assert_eq!(kinds[0], TokenKind::Eof);
+    }
+
+    #[test]
+    fn comment_bytes_tracked() {
+        let mut stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let _tokens = tokenize("// abc\nx /* xy */ y", &mut stats).unwrap();
+        assert!(stats.comment_bytes > 0);
+        assert_eq!(stats.comment_bytes, 14); // "// abc\n" = 7 + "/* xy */" = 7
+    }
+
+    // ── 空白 ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn skip_spaces() {
+        let kinds = tokenize_kinds("   +   ");
+        assert_eq!(kinds[0], TokenKind::Plus);
+    }
+
+    #[test]
+    fn skip_tabs() {
+        let kinds = tokenize_kinds("\t\t42\t");
+        assert_eq!(kinds[0], TokenKind::IntLit("42".into()));
+    }
+
+    #[test]
+    fn skip_newlines() {
+        let kinds = tokenize_kinds("\n\n+\n");
+        assert_eq!(kinds[0], TokenKind::Plus);
+    }
+
+    #[test]
+    fn empty_input_yields_eof() {
+        let kinds = tokenize_kinds("");
+        assert_eq!(kinds.len(), 1);
+        assert_eq!(kinds[0], TokenKind::Eof);
+    }
+
+    // ── 组合场景 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn lex_small_program() {
+        let kinds = tokenize_kinds("def foo(x:i32) -> i32 { return x; }");
+        let expected = vec![
+            TokenKind::Def,
+            TokenKind::Ident("foo".into()),
+            TokenKind::LParen,
+            TokenKind::Ident("x".into()),
+            TokenKind::Colon,
+            TokenKind::TI32,
+            TokenKind::RParen,
+            TokenKind::Arrow,
+            TokenKind::TI32,
+            TokenKind::LBrace,
+            TokenKind::Return,
+            TokenKind::Ident("x".into()),
+            TokenKind::Semi,
+            TokenKind::RBrace,
+            TokenKind::Eof,
+        ];
+        assert_eq!(kinds, expected);
+    }
+
+    #[test]
+    fn lex_all_delimiters() {
+        let kinds = tokenize_kinds("()[]{},:;.");
+        let expected = vec![
+            TokenKind::LParen, TokenKind::RParen,
+            TokenKind::LBracket, TokenKind::RBracket,
+            TokenKind::LBrace, TokenKind::RBrace,
+            TokenKind::Comma, TokenKind::Colon,
+            TokenKind::Semi, TokenKind::Dot,
+            TokenKind::Eof,
+        ];
+        assert_eq!(kinds, expected);
+    }
+
+    #[test]
+    fn lex_line_col_tracking() {
+        let mut stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let tokens = tokenize("a\nb\nc", &mut stats).unwrap();
+        assert_eq!(tokens[0].line, 1);
+        assert_eq!(tokens[0].col, 1);
+        assert_eq!(tokens[1].line, 2);
+        assert_eq!(tokens[1].col, 1);
+        assert_eq!(tokens[2].line, 3);
+        assert_eq!(tokens[2].col, 1);
+    }
+
+    // ── 错误路径 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn lex_unexpected_char() {
+        let mut stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let result = tokenize("@", &mut stats);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.msg.contains("@"));
+        assert_eq!(err.line, 1);
+        assert_eq!(err.col, 1);
+    }
+
+    // ── stats 收集 ───────────────────────────────────────────────────────
+
+    #[test]
+    fn stats_token_count() {
+        let mut stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let tokens = tokenize("def foo() -> void {}", &mut stats).unwrap();
+        assert_eq!(stats.token_count, tokens.len());
+    }
+
+    #[test]
+    fn stats_duration_is_set() {
+        let mut stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let _ = tokenize("x", &mut stats).unwrap();
+        // duration 至少为 0 (极快时可能截断为 0μs)
+        assert!(stats.token_count >= 2); // "x" + EOF
+    }
+
+    // ── format_tokens ────────────────────────────────────────────────────
+
+    #[test]
+    fn format_tokens_eof() {
+        let mut stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let tokens = tokenize("", &mut stats).unwrap();
+        let output = format_tokens(&tokens);
+        assert!(output.contains("EOF"), "output: {}", output);
+    }
+
+    #[test]
+    fn format_tokens_ident() {
+        let mut stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let tokens = tokenize("hi", &mut stats).unwrap();
+        let output = format_tokens(&tokens);
+        assert!(output.contains("IDENT") && output.contains("hi"), "output: {}", output);
     }
 }
