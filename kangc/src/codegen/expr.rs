@@ -78,7 +78,10 @@ fn codegen_str_lit<'ctx>(ctx: &mut CodeGenContext<'ctx>, s: &str) -> Result<Basi
 
     let len_val = ctx.context.i32_type().const_int(len as u64, true);
     let kstr_type = ctx.kang_type_to_basic(&KangType::Str).into_struct_type();
-    Ok(kstr_type.const_named_struct(&[ptr_cast.into(), len_val.into()]).into())
+    let undef = kstr_type.const_zero();
+    let s1 = ok(ctx.builder.build_insert_value(undef, ptr_cast, 0, "str.packed.ptr")).into_struct_value();
+    let s2 = ok(ctx.builder.build_insert_value(s1, len_val, 1, "str.packed")).into_struct_value();
+    Ok(s2.into())
 }
 
 fn codegen_bool_lit<'ctx>(ctx: &CodeGenContext<'ctx>, b: bool) -> Result<BasicValueEnum<'ctx>> {
@@ -334,6 +337,36 @@ fn codegen_unary<'ctx>(
 
 // ── 函数调用 ───────────────────────────────────────────────────────────────
 
+/// C ABI 调用时将 Kang 复合类型（Str/Array/Pair）展平为标量参数
+fn flatten_c_abi_args<'ctx>(
+    ctx: &CodeGenContext<'ctx>,
+    arg_values: &[BasicValueEnum<'ctx>],
+    args: &[TypedExpr],
+) -> Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> {
+    let mut flat: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = Vec::new();
+    for (val, arg) in arg_values.iter().zip(args) {
+        match &arg.ty {
+            KangType::Str | KangType::Array(_) => {
+                let sv = val.into_struct_value();
+                let ptr = ok(ctx.builder.build_extract_value(sv, 0, "arg.ptr"));
+                let len = ok(ctx.builder.build_extract_value(sv, 1, "arg.len"));
+                flat.push(ptr.into());
+                flat.push(len.into());
+            }
+            KangType::Pair(_, _) => {
+                // F6: Pair 作参数时取第一值
+                let sv = val.into_struct_value();
+                let v0 = ok(ctx.builder.build_extract_value(sv, 0, "arg.pair.0"));
+                flat.push(v0.into());
+            }
+            _ => {
+                flat.push((*val).into());
+            }
+        }
+    }
+    flat
+}
+
 fn codegen_call<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     func_name: &str,
@@ -360,8 +393,12 @@ fn codegen_call<'ctx>(
         .or_else(|| ctx.lookup_func(&resolved_name))
         .unwrap_or_else(|| panic!("函数 {} 应在语义阶段已声明", resolved_name));
 
-    let llvm_args: Vec<BasicMetadataValueEnum> =
-        arg_values.iter().map(|v| (*v).into()).collect();
+    // C ABI 外部函数：将 Kang 复合类型展平为标量参数
+    let llvm_args: Vec<BasicMetadataValueEnum> = if func.get_first_basic_block().is_none() {
+        flatten_c_abi_args(ctx, &arg_values, args)
+    } else {
+        arg_values.iter().map(|v| (*v).into()).collect()
+    };
 
     let call = ok(ctx.builder.build_call(func, &llvm_args, "call"));
     if return_ty.is_void() {
@@ -601,7 +638,10 @@ fn codegen_array_lit<'ctx>(
 
     let kptrlen_type = ctx.kang_type_to_basic(array_ty).into_struct_type();
     let count_val = ctx.context.i32_type().const_int(elem_count as u64, true);
-    Ok(kptrlen_type.const_named_struct(&[raw_ptr.into(), count_val.into()]).into())
+    let undef = kptrlen_type.const_zero();
+    let s1 = ok(ctx.builder.build_insert_value(undef, raw_ptr, 0, "arr.packed.ptr")).into_struct_value();
+    let s2 = ok(ctx.builder.build_insert_value(s1, count_val, 1, "arr.packed")).into_struct_value();
+    Ok(s2.into())
 }
 
 // ── 结构体字面量 ───────────────────────────────────────────────────────────
@@ -632,5 +672,9 @@ fn codegen_struct_lit<'ctx>(
         }
     }
 
-    Ok(_struct_type.const_named_struct(&field_values).into())
+    let mut packed = _struct_type.const_zero();
+    for (i, val) in field_values.iter().enumerate() {
+        packed = ok(ctx.builder.build_insert_value(packed, *val, i as u32, &format!("struct.packed.{}", i))).into_struct_value();
+    }
+    Ok(packed.into())
 }

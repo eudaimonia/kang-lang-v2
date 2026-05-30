@@ -1,6 +1,7 @@
 // CodeGenContext — 封装 inkwell LLVM 上下文、模块、Builder
 // 管理变量符号表、结构体类型定义、运行时检查计数
 
+use super::types;
 use crate::semantic::KangType;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -11,7 +12,6 @@ use inkwell::types::StructType;
 use inkwell::values::BasicValueEnum;
 use inkwell::values::FunctionValue;
 use inkwell::values::PointerValue;
-use inkwell::AddressSpace;
 use std::collections::HashMap;
 
 /// 变量存储信息
@@ -152,89 +152,16 @@ impl<'ctx> CodeGenContext<'ctx> {
 
     /// 将 Kang 类型映射为 LLVM 基本类型（void 不可映射，由调用者处理）
     pub fn kang_type_to_basic(&self, ty: &KangType) -> BasicTypeEnum<'ctx> {
-        match ty {
-            KangType::I32 => self.context.i32_type().into(),
-            KangType::F64 => self.context.f64_type().into(),
-            KangType::Bool => self.context.bool_type().into(),
-            KangType::Void => panic!("void 不可映射为 LLVM 基本类型"),
-            KangType::Str => {
-                // str → {i8*, i32}
-                let ptr_type = self.context.ptr_type(AddressSpace::default());
-                let fields = vec![ptr_type.into(), self.context.i32_type().into()];
-                self.context.struct_type(&fields, false).into()
-            }
-            KangType::Array(_) => {
-                // [T] → {i8*, i32} 堆分配数组
-                let ptr_type = self.context.ptr_type(AddressSpace::default());
-                let fields = vec![ptr_type.into(), self.context.i32_type().into()];
-                self.context.struct_type(&fields, false).into()
-            }
-            KangType::Struct(name) => {
-                if let Some(st) = self.struct_types.get(name) {
-                    (*st).into()
-                } else {
-                    let st = self.context.opaque_struct_type(name);
-                    st.into()
-                }
-            }
-            KangType::Pair(t1, t2) => {
-                let f1 = self.kang_type_to_basic(t1);
-                let f2 = self.kang_type_to_basic(t2);
-                let fields = vec![f1, f2];
-                self.context.struct_type(&fields, false).into()
-            }
-        }
+        types::kang_type_to_basic(self, ty)
     }
 
     /// 获取类型的 LLVM 大小（字节），用于 alloca
     pub fn size_of(&self, ty: &KangType) -> u32 {
-        match ty {
-            KangType::I32 => 4,
-            KangType::F64 => 8,
-            KangType::Bool => 1,
-            KangType::Str | KangType::Array(_) => 16, // {ptr, i32} = 12 + padding → 16 on 64-bit
-            KangType::Struct(name) => {
-                let fields = self.struct_fields.get(name)
-                    .expect("结构体应在代码生成前已注册");
-                let mut total = 0u32;
-                for (_, fty) in fields {
-                    total += self.size_of(fty);
-                }
-                // 简化对齐: 8 字节对齐
-                (total + 7) / 8 * 8
-            }
-            KangType::Pair(t1, t2) => {
-                let s1 = self.size_of(t1);
-                let s2 = self.size_of(t2);
-                // 对齐到最大字段的倍数
-                let align = s1.max(s2);
-                ((s1 + s2 + align - 1) / align) * align
-            }
-            KangType::Void => 0,
-        }
+        types::size_of(self, ty)
     }
 
     /// 获取类型的默认值（零初始化），void 不可用
     pub fn default_value(&self, ty: &KangType) -> BasicValueEnum<'ctx> {
-        match ty {
-            KangType::I32 => self.context.i32_type().const_zero().into(),
-            KangType::F64 => self.context.f64_type().const_zero().into(),
-            KangType::Bool => self.context.bool_type().const_zero().into(),
-            KangType::Str | KangType::Array(_) => {
-                let llvm_type = self.kang_type_to_basic(ty);
-                llvm_type.into_struct_type().const_zero().into()
-            }
-            KangType::Struct(name) => {
-                let st = self.struct_types
-                    .get(name)
-                    .expect("结构体类型应在代码生成前已注册");
-                st.const_zero().into()
-            }
-            KangType::Pair(_, _) => {
-                // Pair 总是从函数返回值打包/解包，默认值用零
-                self.kang_type_to_basic(ty).into_struct_type().const_zero().into()
-            }
-            KangType::Void => panic!("void 类型无默认值"),
-        }
+        types::default_value(self, ty)
     }
 }

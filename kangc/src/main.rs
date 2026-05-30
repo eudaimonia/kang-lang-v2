@@ -311,8 +311,8 @@ fn cmd_codegen(args: &[String]) {
         }
     };
 
-    let ir_text = match kangc::codegen(&typed_program, &mut codegen_stats) {
-        Ok(ir) => ir,
+    let cg_result = match kangc::codegen(&typed_program, &mut codegen_stats) {
+        Ok(result) => result,
         Err(e) => {
             emit_diagnostic(&KangError::CodeGen(e), &source, &file_path.to_string_lossy());
             process::exit(1);
@@ -321,13 +321,13 @@ fn cmd_codegen(args: &[String]) {
 
     match &out_path {
         Some(path) => {
-            std::fs::write(path, &ir_text).unwrap_or_else(|e| {
+            std::fs::write(path, &cg_result.ir_text).unwrap_or_else(|e| {
                 eprintln!("写入文件失败 {}: {}", path.display(), e);
                 process::exit(1);
             });
         }
         None => {
-            println!("{}", ir_text);
+            println!("{}", cg_result.ir_text);
         }
     }
 

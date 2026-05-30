@@ -10,12 +10,12 @@ pub mod types;
 
 use crate::error::CodeGenError;
 use crate::semantic::{KangType, TypedProgram, TypedTopLevel};
-use crate::stats::CodeGenStats;
+use crate::stats::{CodeGenResult, CodeGenStats};
 use context::CodeGenContext;
 use inkwell::context::Context;
 
 /// 将 TypedProgram 代码生成为 LLVM IR 文本
-pub fn codegen(program: &TypedProgram, stats: &mut CodeGenStats) -> Result<String, CodeGenError> {
+pub fn codegen(program: &TypedProgram, stats: &mut CodeGenStats) -> Result<CodeGenResult, CodeGenError> {
     let llvm_context = Context::create();
     let mut ctx = CodeGenContext::new(&llvm_context, "kang_module");
 
@@ -41,10 +41,11 @@ pub fn codegen(program: &TypedProgram, stats: &mut CodeGenStats) -> Result<Strin
         }
     }
 
-    // 验证生成的 LLVM IR（非致命：已知基本块布局问题待修复）
-    // TODO: 修复 arena_alloc 调用在分支后的 use-of-instruction 验证错误
+    // 验证生成的 LLVM IR
     if let Err(e) = ctx.module.verify() {
-        eprintln!("[codegen] LLVM IR 验证警告: {}", e.to_string().lines().next().unwrap_or(""));
+        return Err(CodeGenError {
+            msg: format!("LLVM IR 验证失败: {}", e.to_string().lines().next().unwrap_or("")),
+        });
     }
 
     // 输出 LLVM IR
@@ -62,7 +63,10 @@ pub fn codegen(program: &TypedProgram, stats: &mut CodeGenStats) -> Result<Strin
         }
     }
 
-    Ok(ir_string)
+    Ok(CodeGenResult {
+        ir_text: ir_string,
+        stats: stats.clone(),
+    })
 }
 
 /// 生成单个函数的 LLVM IR
@@ -152,7 +156,7 @@ mod tests {
         let tokens = lexer::tokenize(source, &mut lex_stats).expect("lex");
         let program = parser::parse(&tokens, &mut parse_stats).expect("parse");
         let typed = semantic::check(&program, &mut sem_stats).expect("check");
-        codegen(&typed, &mut cg_stats).expect("codegen")
+        codegen(&typed, &mut cg_stats).expect("codegen").ir_text
     }
 
     #[test]
@@ -247,9 +251,9 @@ mod tests {
             };
 
             match codegen(&typed, &mut cg_stats) {
-                Ok(ir) => {
-                    assert!(!ir.is_empty(), "{}: IR 不应为空", file);
-                    assert!(ir.contains("source_filename"), "{}: IR 应包含 source_filename", file);
+                Ok(result) => {
+                    assert!(!result.ir_text.is_empty(), "{}: IR 不应为空", file);
+                    assert!(result.ir_text.contains("source_filename"), "{}: IR 应包含 source_filename", file);
                 }
                 Err(e) => panic!("{}: 代码生成失败: {}", file, e.msg),
             }

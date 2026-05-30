@@ -2,9 +2,49 @@
 
 use super::context::CodeGenContext;
 use inkwell::values::IntValue;
+use inkwell::AddressSpace;
+
+/// 获取或创建全局错误消息字符串，返回 (ptr, len)
+fn panic_msg_global<'ctx>(
+    ctx: &mut CodeGenContext<'ctx>,
+    name: &str,
+    msg: &[u8],
+) -> (inkwell::values::PointerValue<'ctx>, IntValue<'ctx>) {
+    if let Some(g) = ctx.module.get_global(name) {
+        let ptr = ctx.builder.build_bit_cast(
+            g.as_pointer_value(),
+            ctx.context.ptr_type(AddressSpace::default()),
+            &format!("{}.ptr", name),
+        ).unwrap().into_pointer_value();
+        let len = ctx.context.i32_type().const_int(msg.len() as u64, true);
+        return (ptr, len);
+    }
+
+    let array_type = ctx.context.i8_type().array_type(msg.len() as u32);
+    let global = ctx.module.add_global(array_type, None, name);
+    let bytes: Vec<IntValue> = msg.iter().map(|&b| ctx.context.i8_type().const_int(b as u64, true)).collect();
+    global.set_initializer(&ctx.context.i8_type().const_array(&bytes));
+
+    let ptr = ctx.builder.build_bit_cast(
+        global.as_pointer_value(),
+        ctx.context.ptr_type(AddressSpace::default()),
+        &format!("{}.ptr", name),
+    ).unwrap().into_pointer_value();
+    let len = ctx.context.i32_type().const_int(msg.len() as u64, true);
+    (ptr, len)
+}
+
+/// 在 fail 基本块中调用 k_panic(msg) 并 unreachable
+fn call_panic<'ctx>(ctx: &mut CodeGenContext<'ctx>, msg: &[u8], tag: &str) {
+    let global_name = format!("panic.msg.{}", tag);
+    let (ptr, len) = panic_msg_global(ctx, &global_name, msg);
+    let panic_func = ctx.module.get_function("k_panic").expect("k_panic 应在 builtins 已声明");
+    let _ = ctx.builder.build_call(panic_func, &[ptr.into(), len.into()], "panic");
+    let _ = ctx.builder.build_unreachable();
+}
 
 /// 插入数组索引越界检查: 0 <= index < len
-/// 检查失败时调用 @llvm.trap 中止程序
+/// 检查失败时调用 k_panic 输出诊断信息
 pub fn insert_bounds_check<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     index: IntValue<'ctx>,
@@ -39,17 +79,9 @@ pub fn insert_bounds_check<'ctx>(
 
     let _ = ctx.builder.build_conditional_branch(is_fail, fail_bb, ok_bb);
 
-    // 失败路径: trap
+    // 失败路径: k_panic
     ctx.builder.position_at_end(fail_bb);
-    let _ = ctx.builder.build_call(
-        ctx.module.get_function("llvm.trap").unwrap_or_else(|| {
-            let trap_type = ctx.context.void_type().fn_type(&[], false);
-            ctx.module.add_function("llvm.trap", trap_type, None)
-        }),
-        &[],
-        "trap",
-    );
-    let _ = ctx.builder.build_unreachable();
+    call_panic(ctx, b"index out of bounds", "bounds");
 
     // 正常路径
     ctx.builder.position_at_end(ok_bb);
@@ -77,17 +109,9 @@ pub fn insert_div_zero_check<'ctx>(
 
     let _ = ctx.builder.build_conditional_branch(is_zero, fail_bb, ok_bb);
 
-    // 失败路径: trap
+    // 失败路径: k_panic
     ctx.builder.position_at_end(fail_bb);
-    let _ = ctx.builder.build_call(
-        ctx.module.get_function("llvm.trap").unwrap_or_else(|| {
-            let trap_type = ctx.context.void_type().fn_type(&[], false);
-            ctx.module.add_function("llvm.trap", trap_type, None)
-        }),
-        &[],
-        "trap",
-    );
-    let _ = ctx.builder.build_unreachable();
+    call_panic(ctx, b"division by zero", "divz");
 
     // 正常路径
     ctx.builder.position_at_end(ok_bb);
@@ -128,17 +152,9 @@ pub fn insert_int_min_check<'ctx>(
 
     let _ = ctx.builder.build_conditional_branch(is_overflow, fail_bb, ok_bb);
 
-    // 失败路径: trap
+    // 失败路径: k_panic
     ctx.builder.position_at_end(fail_bb);
-    let _ = ctx.builder.build_call(
-        ctx.module.get_function("llvm.trap").unwrap_or_else(|| {
-            let trap_type = ctx.context.void_type().fn_type(&[], false);
-            ctx.module.add_function("llvm.trap", trap_type, None)
-        }),
-        &[],
-        "trap",
-    );
-    let _ = ctx.builder.build_unreachable();
+    call_panic(ctx, b"integer overflow", "overflow");
 
     // 正常路径
     ctx.builder.position_at_end(ok_bb);

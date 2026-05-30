@@ -47,3 +47,10 @@ pub struct CodeGenStats {
     pub llvm_function_count: usize,
     pub runtime_check_insertions: usize,
 }
+
+/// 代码生成完整产物
+#[derive(Serialize, Debug, Clone)]
+pub struct CodeGenResult {
+    pub ir_text: String,
+    pub stats: CodeGenStats,
+}

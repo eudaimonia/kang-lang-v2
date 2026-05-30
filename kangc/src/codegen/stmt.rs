@@ -240,7 +240,9 @@ fn codegen_return<'ctx>(
             let v0 = codegen_expr(ctx, &values[0])?;
             let v1 = codegen_expr(ctx, &values[1])?;
             let pair_type = ctx.kang_type_to_basic(func_return).into_struct_type();
-            let packed = pair_type.const_named_struct(&[v0, v1]);
+            let undef = pair_type.const_zero();
+            let s1 = ok(ctx.builder.build_insert_value(undef, v0, 0, "pair.packed.0")).into_struct_value();
+            let packed = ok(ctx.builder.build_insert_value(s1, v1, 1, "pair.packed.1")).into_struct_value();
             let _ = ctx.builder.build_return(Some(&packed));
         }
         _ => {

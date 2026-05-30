@@ -4,8 +4,9 @@
 use super::context::CodeGenContext;
 use inkwell::AddressSpace;
 
-/// 注册所有 21 个内置函数到 module
+/// 注册所有内置函数到 module（22 个: 21 个 kangrt + k_panic）
 pub fn declare_all(ctx: &mut CodeGenContext) {
+    declare_k_panic(ctx);
     declare_len_str(ctx);
     declare_push(ctx);
     declare_str_concat(ctx);
@@ -70,6 +71,14 @@ fn kstr_params<'ctx>(ctx: &CodeGenContext<'ctx>) -> Vec<inkwell::types::BasicMet
         ctx.context.ptr_type(AddressSpace::default()).into();
     let i32_ty: inkwell::types::BasicMetadataTypeEnum = ctx.context.i32_type().into();
     vec![ptr_ty, i32_ty]
+}
+
+// ── 运行时 panic ───────────────────────────────────────────────────────────
+
+fn declare_k_panic(ctx: &mut CodeGenContext) {
+    let params = kstr_params(ctx);
+    let fn_type = ctx.context.void_type().fn_type(&params, false);
+    ctx.module.add_function("k_panic", fn_type, None);
 }
 
 // ── 集合操作 ──────────────────────────────────────────────────────────────
