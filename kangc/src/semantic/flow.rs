@@ -26,12 +26,12 @@ fn stmt_returns(s: &Stmt) -> bool {
             }
         }
 
-        Stmt::Block(stmts) => stmts_return(stmts),
+        Stmt::Block(stmts, ..) => stmts_return(stmts),
 
         // for 循环体可能不执行，不保证 return
         Stmt::For { .. } => false,
 
         // 表达式语句、变量声明、赋值：不保证 return
-        Stmt::Expr(_) | Stmt::VarDecl { .. } | Stmt::Assign { .. } => false,
+        Stmt::Expr(..) | Stmt::VarDecl { .. } | Stmt::Assign { .. } => false,
     }
 }

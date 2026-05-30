@@ -96,13 +96,13 @@ fn codegen_lvalue_ptr<'ctx>(
     lvalue: &LValue,
 ) -> Result<inkwell::values::PointerValue<'ctx>> {
     match lvalue {
-        LValue::Ident(name) => {
+        LValue::Ident(name, ..) => {
             let (ptr, _) = ctx
                 .lookup_var(name)
                 .ok_or_else(|| CodeGenError { msg: format!("未定义变量: {}", name) })?;
             Ok(ptr)
         }
-        LValue::Index { array, index } => {
+        LValue::Index { array, index, .. } => {
             // 数组索引: arr[i] → 计算偏移后的元素指针
             // array 是 raw Expr，在语义阶段已校验，此处取 ident + 类型
             let (arr_ptr, arr_ty) = resolve_array_ptr(ctx, array)?;
@@ -133,7 +133,7 @@ fn codegen_lvalue_ptr<'ctx>(
             ));
             Ok(typed_ptr)
         }
-        LValue::FieldAccess { obj, field } => {
+        LValue::FieldAccess { obj, field, .. } => {
             // obj 是 raw Expr (通常为 Ident)，查找其 alloca + 类型
             let (struct_ptr, struct_ty) = resolve_struct_ptr(ctx, obj)?;
             let struct_name = match &struct_ty {
@@ -168,7 +168,7 @@ fn resolve_array_ptr<'ctx>(
     array: &crate::ast::Expr,
 ) -> Result<(inkwell::values::PointerValue<'ctx>, KangType)> {
     match array {
-        crate::ast::Expr::Ident(name) => {
+        crate::ast::Expr::Ident(name, ..) => {
             let (alloca, ty) = ctx
                 .lookup_var(name)
                 .ok_or_else(|| CodeGenError { msg: format!("未定义变量: {}", name) })?;
@@ -191,7 +191,7 @@ fn resolve_struct_ptr<'ctx>(
     obj: &crate::ast::Expr,
 ) -> Result<(inkwell::values::PointerValue<'ctx>, KangType)> {
     match obj {
-        crate::ast::Expr::Ident(name) => {
+        crate::ast::Expr::Ident(name, ..) => {
             let (ptr, ty) = ctx
                 .lookup_var(name)
                 .ok_or_else(|| CodeGenError { msg: format!("未定义变量: {}", name) })?;
@@ -207,14 +207,14 @@ fn codegen_expr_raw<'ctx>(
     expr: &crate::ast::Expr,
 ) -> Result<BasicValueEnum<'ctx>> {
     match expr {
-        crate::ast::Expr::Ident(name) => {
+        crate::ast::Expr::Ident(name, ..) => {
             let (alloca, ty) = ctx
                 .lookup_var(name)
                 .ok_or_else(|| CodeGenError { msg: format!("未定义变量: {}", name) })?;
             let val = ok(ctx.builder.build_load(ctx.kang_type_to_basic(&ty), alloca, "lval.load"));
             Ok(val)
         }
-        crate::ast::Expr::IntLit(v) => {
+        crate::ast::Expr::IntLit(v, ..) => {
             let n: i64 = v.parse().unwrap_or(0);
             Ok(ctx.context.i32_type().const_int(n as u64, true).into())
         }
@@ -314,13 +314,8 @@ fn codegen_for<'ctx>(
     func_return: &KangType,
 ) -> Result<()> {
     let start_val = codegen_expr(ctx, start)?;
-    let end_val = codegen_expr(ctx, end)?;
 
     let current_fn = ctx.builder.get_insert_block().unwrap().get_parent().unwrap();
-
-    let cond_bb = ctx.context.append_basic_block(current_fn, "for.cond");
-    let body_bb = ctx.context.append_basic_block(current_fn, "for.body");
-    let end_bb = ctx.context.append_basic_block(current_fn, "for.end");
 
     // 初始化循环变量
     let alloca = ok(ctx.builder.build_alloca(ctx.kang_type_to_basic(var_type), var_name));
@@ -328,31 +323,23 @@ fn codegen_for<'ctx>(
     ctx.push_scope();
     ctx.register_var(var_name, alloca, var_type.clone());
 
+    let cond_bb = ctx.context.append_basic_block(current_fn, "for.cond");
+    let body_bb = ctx.context.append_basic_block(current_fn, "for.body");
+    let end_bb = ctx.context.append_basic_block(current_fn, "for.end");
+
     // 跳转到条件检查
     let _ = ctx.builder.build_unconditional_branch(cond_bb);
+
+    // 条件块: 每次迭代重新求值 end 表达式（可引用循环变量）
     ctx.builder.position_at_end(cond_bb);
-
-    // 条件: var < end
-    let var_val = ok(ctx.builder.build_load(ctx.kang_type_to_basic(var_type), alloca, "for.var"));
-    let cond = ok(match var_type {
-        KangType::I32 => ctx.builder.build_int_compare(
-            inkwell::IntPredicate::SLT,
-            var_val.into_int_value(),
-            end_val.into_int_value(),
-            "for.cond",
-        ),
-        KangType::F64 => {
-            ctx.builder.build_float_compare(
-                inkwell::FloatPredicate::OLT,
-                var_val.into_float_value(),
-                end_val.into_float_value(),
-                "for.cond",
-            )
-        }
-        _ => return Err(CodeGenError { msg: "for 循环变量仅支持 i32/f64".into() }),
-    });
-
-    let _ = ctx.builder.build_conditional_branch(cond, body_bb, end_bb);
+    let cond_val = codegen_expr(ctx, end)?;
+    let cond_bool = ok(ctx.builder.build_int_compare(
+        inkwell::IntPredicate::NE,
+        cond_val.into_int_value(),
+        ctx.context.bool_type().const_zero(),
+        "for.cond",
+    ));
+    let _ = ctx.builder.build_conditional_branch(cond_bool, body_bb, end_bb);
 
     // 循环体
     ctx.builder.position_at_end(body_bb);

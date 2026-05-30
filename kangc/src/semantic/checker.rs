@@ -6,6 +6,7 @@ use super::flow;
 use super::scope::{FuncSignature, ScopeHint, StructInfo, SymbolKind, SymbolTable};
 use super::types::*;
 use crate::ast::{self, BinOp, UnaryOp};
+use crate::ast::{span_of_expr, span_of_lvalue, span_of_stmt};
 use crate::error::SemanticError;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -95,7 +96,7 @@ impl Checker {
             let kt = KangType::from_ast_type(ty);
             // ST1: 字段不能是 void
             if kt == KangType::Void {
-                self.error("结构体字段类型不能是 void (ST1)", &name);
+                self.error("结构体字段类型不能是 void (ST1)", &name, 0..0);
                 continue;
             }
             // ST2: 禁止直接自引用
@@ -107,7 +108,7 @@ impl Checker {
                             s.name, s.name
                         ),
                         &name,
-                    );
+                    0..0);
                     continue;
                 }
             }
@@ -144,7 +145,7 @@ impl Checker {
                             f.name
                         ),
                         &f.name,
-                    );
+                    0..0);
                     return;
                 }
             }
@@ -193,7 +194,7 @@ impl Checker {
                     func.name
                 ),
                 &func.name,
-            );
+            0..0);
         }
 
         self.symbols.pop_scope();
@@ -217,20 +218,20 @@ impl Checker {
 
     fn check_stmt(&mut self, s: &ast::Stmt) -> TypedStmt {
         match s {
-            ast::Stmt::VarDecl { bindings, init } => self.check_var_decl(bindings, init),
-            ast::Stmt::Assign { lvalue, value } => self.check_assign(lvalue, value),
-            ast::Stmt::Return { values } => self.check_return(values),
-            ast::Stmt::If { condition, then_branch, else_branch } => {
-                self.check_if(condition, then_branch, else_branch.as_deref())
+            ast::Stmt::VarDecl { bindings, init, .. } => self.check_var_decl(bindings, init),
+            ast::Stmt::Assign { lvalue, value, .. } => self.check_assign(lvalue, value),
+            ast::Stmt::Return { values, .. } => self.check_return(values, span_of_stmt(s)),
+            ast::Stmt::If { condition, then_branch, else_branch, .. } => {
+                self.check_if(condition, then_branch, else_branch.as_deref(), span_of_stmt(s))
             }
-            ast::Stmt::For { var_name, var_type, start, end, step_lvalue, step_expr, body } => {
-                self.check_for(var_name, var_type, start, end, step_lvalue, step_expr, body)
+            ast::Stmt::For { var_name, var_type, start, end, step_lvalue, step_expr, body, .. } => {
+                self.check_for(var_name, var_type, start, end, step_lvalue, step_expr, body, span_of_stmt(s))
             }
-            ast::Stmt::Expr(e) => {
+            ast::Stmt::Expr(e, ..) => {
                 let te = self.check_expr(e, None);
                 TypedStmt { kind: TypedStmtKind::Expr(Box::new(te)) }
             }
-            ast::Stmt::Block(stmts) => {
+            ast::Stmt::Block(stmts, ..) => {
                 let typed = self.check_block(stmts);
                 TypedStmt { kind: TypedStmtKind::Block(typed) }
             }
@@ -262,12 +263,12 @@ impl Checker {
             self.error(
                 &format!("函数返回 1 个值，但 var 试图接收 2 个值 (M4)"),
                 "",
-            );
+            span_of_expr(init));
         }
 
         // M6: 不能从 void 函数接收
         if init_ty.is_void() && !bindings.is_empty() && !(bindings.len() == 1 && matches!(bindings[0], ast::VarBinding::Discard)) {
-            self.error("不能从 void 函数接收返回值 (M6)", "");
+            self.error("不能从 void 函数接收返回值 (M6)", "", span_of_expr(init));
         }
 
         let mut typed_bindings = Vec::new();
@@ -290,7 +291,7 @@ impl Checker {
                                     kt, first_ty
                                 ),
                                 name,
-                            );
+                            span_of_expr(init));
                         } else {
                             self.passes += 1;
                         }
@@ -303,7 +304,7 @@ impl Checker {
                                         kt, t2
                                     ),
                                     name,
-                                );
+                                span_of_expr(init));
                             } else {
                                 self.passes += 1;
                             }
@@ -314,14 +315,14 @@ impl Checker {
                         self.error(
                             &format!("参数/变量 \"{}\" 不能在同一作用域重新声明 (S1)", name),
                             name,
-                        );
+                        span_of_expr(init));
                     // S4: 不能声明与函数同名的变量
                     } else if let Some(entry) = self.symbols.lookup(name) {
                         if matches!(entry.kind, SymbolKind::Function(_)) {
                             self.error(
                                 &format!("变量 \"{}\" 与函数同名，命名空间冲突 (S4)", name),
                                 name,
-                            );
+                            span_of_expr(init));
                         }
                         let _ = self.symbols.insert(
                             name,
@@ -365,7 +366,7 @@ impl Checker {
                 self.error(
                     &format!("赋值类型不匹配: 左侧 {}，右侧 {}", lt, val_typed.ty),
                     "",
-                );
+                span_of_expr(value));
             } else {
                 self.passes += 1;
             }
@@ -382,19 +383,19 @@ impl Checker {
     /// 解析左值的类型（用于赋值类型检查）
     fn resolve_lvalue_type(&mut self, lv: &ast::LValue) -> Option<KangType> {
         match lv {
-            ast::LValue::Ident(name) => {
+            ast::LValue::Ident(name, ..) => {
                 match self.symbols.lookup(name) {
                     Some(entry) => match &entry.kind {
                         SymbolKind::Variable(kt) => Some(kt.clone()),
                         _ => {
                             // S4: 函数名不可作变量
-                            self.error(&format!("\"{}\" 是函数名，不可赋值 (AS4)", name), name);
+                            self.error(&format!("\"{}\" 是函数名，不可赋值 (AS4)", name), name, span_of_lvalue(lv));
                             None
                         }
                     },
                     None => {
                         // S2: 未声明变量
-                        self.error(&format!("未声明的变量 \"{}\" (S2)", name), name);
+                        self.error(&format!("未声明的变量 \"{}\" (S2)", name), name, span_of_lvalue(lv));
                         None
                     }
                 }
@@ -403,7 +404,7 @@ impl Checker {
                 // AS1: str 不可变，索引不可作左值
                 let arr_typed = self.check_expr(array, None);
                 if matches!(arr_typed.ty, KangType::Str) {
-                    self.error("字符串不可变，s[i] 不能作为赋值左值 (AS1)", "");
+                    self.error("字符串不可变，s[i] 不能作为赋值左值 (AS1)", "", span_of_lvalue(lv));
                     return None;
                 }
                 // 数组索引: 返回元素类型
@@ -413,7 +414,7 @@ impl Checker {
                     None
                 }
             }
-            ast::LValue::FieldAccess { obj, field } => {
+            ast::LValue::FieldAccess { obj, field, .. } => {
                 // ST6/ST7: 字段访问须是结构体且字段存在
                 let obj_typed = self.check_expr(obj, None);
                 if let KangType::Struct(name) = &obj_typed.ty {
@@ -426,15 +427,15 @@ impl Checker {
                         self.error(
                             &format!("结构体 \"{}\" 没有字段 \"{}\" (ST7)", name, field),
                             field,
-                        );
+                        span_of_lvalue(lv));
                     } else {
-                        self.error(&format!("未定义的结构体类型 \"{}\" (ST5)", name), name);
+                        self.error(&format!("未定义的结构体类型 \"{}\" (ST5)", name), name, span_of_lvalue(lv));
                     }
                 } else {
                     self.error(
                         &format!("非结构体类型不能使用 .field 访问 (ST6)"),
                         field,
-                    );
+                    span_of_lvalue(lv));
                 }
                 None
             }
@@ -443,7 +444,7 @@ impl Checker {
 
     // ── Return ──────────────────────────────────────────────────────────────
 
-    fn check_return(&mut self, values: &[ast::Expr]) -> TypedStmt {
+    fn check_return(&mut self, values: &[ast::Expr], span: Range<usize>) -> TypedStmt {
         // F2: void 函数 return 不能带值
         if self.current_func_return.is_void() && !values.is_empty() {
             self.error(
@@ -452,7 +453,7 @@ impl Checker {
                     self.current_func_name
                 ),
                 "",
-            );
+            span.clone());
         }
 
         // M1/M2: 返回数量匹配
@@ -472,7 +473,7 @@ impl Checker {
                     values.len()
                 ),
                 "",
-            );
+            span);
         }
 
         // M3: 返回类型匹配
@@ -503,7 +504,7 @@ impl Checker {
                         self.error(
                             &format!("返回类型不匹配: 期望 {}，得到 {} (M3)", et, tv.ty),
                             "",
-                        );
+                        span_of_expr(v));
                     } else {
                         self.passes += 1;
                     }
@@ -524,6 +525,7 @@ impl Checker {
         condition: &ast::Expr,
         then_branch: &ast::Stmt,
         else_branch: Option<&ast::Stmt>,
+        span: Range<usize>,
     ) -> TypedStmt {
         let cond_typed = self.check_expr(condition, Some(KangType::Bool));
         // T3: if 条件必须是 bool
@@ -531,7 +533,7 @@ impl Checker {
             self.error(
                 &format!("if 条件必须是 bool 类型，得到 {} (T3)", cond_typed.ty),
                 "",
-            );
+            span);
         } else {
             self.passes += 1;
         }
@@ -559,6 +561,7 @@ impl Checker {
         step_lvalue: &ast::LValue,
         step_expr: &ast::Expr,
         body: &ast::Stmt,
+        span: Range<usize>,
     ) -> TypedStmt {
         self.symbols.push_scope();
 
@@ -583,7 +586,7 @@ impl Checker {
             self.error(
                 &format!("for 循环条件必须是 bool 类型，得到 {} (T4)", end_typed.ty),
                 "",
-            );
+            span);
         } else {
             self.passes += 1;
         }
@@ -613,22 +616,22 @@ impl Checker {
     /// 检查表达式，可选的 expected_type 用于上下文类型推断（如空数组 []）
     fn check_expr(&mut self, expr: &ast::Expr, expected_type: Option<KangType>) -> TypedExpr {
         match expr {
-            ast::Expr::IntLit(v) => self.typed_lit(TypedExprKind::IntLit(v.clone()), KangType::I32),
-            ast::Expr::FloatLit(v) => {
+            ast::Expr::IntLit(v, ..) => self.typed_lit(TypedExprKind::IntLit(v.clone()), KangType::I32),
+            ast::Expr::FloatLit(v, ..) => {
                 self.typed_lit(TypedExprKind::FloatLit(v.clone()), KangType::F64)
             }
-            ast::Expr::StrLit(v) => self.typed_lit(TypedExprKind::StrLit(v.clone()), KangType::Str),
-            ast::Expr::BoolLit(v) => {
+            ast::Expr::StrLit(v, ..) => self.typed_lit(TypedExprKind::StrLit(v.clone()), KangType::Str),
+            ast::Expr::BoolLit(v, ..) => {
                 self.typed_lit(TypedExprKind::BoolLit(*v), KangType::Bool)
             }
-            ast::Expr::Ident(name) => self.check_ident(name),
-            ast::Expr::Binary { left, op, right } => self.check_binary(left, op, right),
-            ast::Expr::Unary { op, expr: inner } => self.check_unary(op, inner),
-            ast::Expr::Call { func, args } => self.check_call(func, args),
-            ast::Expr::Index { array, index } => self.check_index(array, index),
-            ast::Expr::FieldAccess { obj, field } => self.check_field_access(obj, field),
-            ast::Expr::ArrayLit(elems) => self.check_array_lit(elems, expected_type),
-            ast::Expr::StructLit { name, fields } => self.check_struct_lit(name, fields),
+            ast::Expr::Ident(name, ..) => self.check_ident(name, span_of_expr(expr)),
+            ast::Expr::Binary { left, op, right, .. } => self.check_binary(left, op, right, span_of_expr(expr)),
+            ast::Expr::Unary { op, expr: inner, .. } => self.check_unary(op, inner, span_of_expr(expr)),
+            ast::Expr::Call { func, args, .. } => self.check_call(func, args, span_of_expr(expr)),
+            ast::Expr::Index { array, index, .. } => self.check_index(array, index, span_of_expr(expr)),
+            ast::Expr::FieldAccess { obj, field, .. } => self.check_field_access(obj, field, span_of_expr(expr)),
+            ast::Expr::ArrayLit(elems, ..) => self.check_array_lit(elems, expected_type, span_of_expr(expr)),
+            ast::Expr::StructLit { name, fields, .. } => self.check_struct_lit(name, fields, span_of_expr(expr)),
         }
     }
 
@@ -638,7 +641,7 @@ impl Checker {
     }
 
     // 标识符: 查符号表
-    fn check_ident(&mut self, name: &str) -> TypedExpr {
+    fn check_ident(&mut self, name: &str, span: Range<usize>) -> TypedExpr {
         // 先提取数据，避免 borrow checker 冲突
         let lookup_result = self.symbols.lookup(name).map(|e| {
             (match &e.kind {
@@ -652,7 +655,7 @@ impl Checker {
             Some((("var", kt, hint), _entry_hint)) => {
                 // M5: _ 不可作变量使用
                 if name == "_" {
-                    self.error("_ 是占位符，不能在表达式中使用 (M5)", name);
+                    self.error("_ 是占位符，不能在表达式中使用 (M5)", name, span);
                     return TypedExpr {
                         kind: TypedExprKind::Ident(name.to_string()),
                         ty: KangType::I32,
@@ -663,7 +666,7 @@ impl Checker {
                     self.error(
                         &format!("循环变量 \"{}\" 在循环结束后不可访问 (S3)", name),
                         name,
-                    );
+                    span);
                 }
                 self.passes += 1;
                 TypedExpr {
@@ -673,14 +676,14 @@ impl Checker {
             }
             Some((("func", _, _), _)) => {
                 // Kang 不支持一等函数，函数名不可作值使用
-                self.error(&format!("函数 \"{}\" 不能作为值引用，Kang 不支持一等函数", name), name);
+                self.error(&format!("函数 \"{}\" 不能作为值引用，Kang 不支持一等函数", name), name, span);
                 TypedExpr {
                     kind: TypedExprKind::Ident(name.to_string()),
                     ty: KangType::I32,
                 }
             }
             _ => {
-                self.error(&format!("未声明的变量 \"{}\" (S2)", name), name);
+                self.error(&format!("未声明的变量 \"{}\" (S2)", name), name, span);
                 TypedExpr {
                     kind: TypedExprKind::Ident(name.to_string()),
                     ty: KangType::I32,
@@ -695,6 +698,7 @@ impl Checker {
         left: &ast::Expr,
         op: &ast::BinOp,
         right: &ast::Expr,
+        span: Range<usize>,
     ) -> TypedExpr {
         let left_typed = self.check_expr(left, None);
         let lt = &left_typed.ty;
@@ -724,10 +728,10 @@ impl Checker {
             BinOp::Or | BinOp::And => {
                 // T5: && || 操作数必须是 bool
                 if *lt != KangType::Bool {
-                    self.error(&format!("\"{}\" 操作数必须是 bool，得到 {} (T5)", op, lt), "");
+                    self.error(&format!("\"{}\" 操作数必须是 bool，得到 {} (T5)", op, lt), "", span_of_expr(left));
                 }
                 if *rt != KangType::Bool {
-                    self.error(&format!("\"{}\" 操作数必须是 bool，得到 {} (T5)", op, rt), "");
+                    self.error(&format!("\"{}\" 操作数必须是 bool，得到 {} (T5)", op, rt), "", span_of_expr(right));
                 }
                 if *lt == KangType::Bool && *rt == KangType::Bool {
                     self.passes += 1;
@@ -747,7 +751,7 @@ impl Checker {
                     self.error(
                         &format!("==/!= 要求左右类型相同，得到 {} 和 {} (T7/T8)", lt, rt),
                         "",
-                    );
+                    span);
                 } else {
                     self.passes += 1;
                 }
@@ -773,7 +777,7 @@ impl Checker {
                             lt, rt
                         ),
                         "",
-                    );
+                    span);
                 } else {
                     self.passes += 1;
                 }
@@ -799,7 +803,7 @@ impl Checker {
                             op, lt, rt
                         ),
                         "",
-                    );
+                    span);
                 } else {
                     self.passes += 1;
                 }
@@ -819,11 +823,11 @@ impl Checker {
     /// 窥探表达式的类型（用于 str 拼接判断，避免借用冲突）
     fn peek_expr_type(&self, expr: &ast::Expr) -> KangType {
         match expr {
-            ast::Expr::IntLit(_) => KangType::I32,
-            ast::Expr::FloatLit(_) => KangType::F64,
-            ast::Expr::StrLit(_) => KangType::Str,
-            ast::Expr::BoolLit(_) => KangType::Bool,
-            ast::Expr::Ident(name) => self
+            ast::Expr::IntLit(..) => KangType::I32,
+            ast::Expr::FloatLit(..) => KangType::F64,
+            ast::Expr::StrLit(..) => KangType::Str,
+            ast::Expr::BoolLit(..) => KangType::Bool,
+            ast::Expr::Ident(name, ..) => self
                 .symbols
                 .lookup(name)
                 .and_then(|e| match &e.kind {
@@ -837,7 +841,7 @@ impl Checker {
     }
 
     // 一元表达式
-    fn check_unary(&mut self, op: &ast::UnaryOp, expr: &ast::Expr) -> TypedExpr {
+    fn check_unary(&mut self, op: &ast::UnaryOp, expr: &ast::Expr, span: Range<usize>) -> TypedExpr {
         let inner = self.check_expr(expr, None);
         match op {
             UnaryOp::Neg => {
@@ -846,7 +850,7 @@ impl Checker {
                     self.error(
                         &format!("取负 \"-\" 操作数必须是 i32 或 f64，得到 {} (T1)", inner.ty),
                         "",
-                    );
+                    span);
                 } else {
                     self.passes += 1;
                 }
@@ -861,7 +865,7 @@ impl Checker {
                     self.error(
                         &format!("! 操作数必须是 bool，得到 {} (T6)", inner.ty),
                         "",
-                    );
+                    span);
                 } else {
                     self.passes += 1;
                 }
@@ -874,12 +878,12 @@ impl Checker {
     }
 
     // 函数调用
-    fn check_call(&mut self, func: &ast::Expr, args: &[ast::Expr]) -> TypedExpr {
+    fn check_call(&mut self, func: &ast::Expr, args: &[ast::Expr], span: Range<usize>) -> TypedExpr {
         // 提取函数名
         let func_name = match func {
-            ast::Expr::Ident(name) => name.clone(),
+            ast::Expr::Ident(name, ..) => name.clone(),
             _ => {
-                self.error("调用目标必须是函数名", "");
+                self.error("调用目标必须是函数名", "", span);
                 return TypedExpr {
                     kind: TypedExprKind::Call { func_name: "<unknown>".into(), args: vec![] },
                     ty: KangType::I32,
@@ -893,10 +897,10 @@ impl Checker {
 
         // 特殊处理: 内置泛型函数
         if func_name == "len" {
-            return self.check_builtin_len(&func_name, &typed_args, &arg_types);
+            return self.check_builtin_len(&func_name, &typed_args, &arg_types, span);
         }
         if func_name == "push" {
-            return self.check_builtin_push(&func_name, &typed_args, &arg_types);
+            return self.check_builtin_push(&func_name, &typed_args, &arg_types, span);
         }
 
         // 查找函数签名（提取数据避免 borrow checker 冲突）
@@ -915,7 +919,7 @@ impl Checker {
                             arg_types.len()
                         ),
                         "",
-                    );
+                    span.clone());
                 }
 
                 // F6: 参数类型 — Pair 自动解包取第一值（多返回值作单值参数）
@@ -934,7 +938,7 @@ impl Checker {
                                 effective_at
                             ),
                             "",
-                        );
+                        span.clone());
                     } else {
                         self.passes += 1;
                     }
@@ -949,7 +953,7 @@ impl Checker {
                 }
             }
             None => {
-                self.error(&format!("未定义的函数 \"{}\"", func_name), &func_name);
+                self.error(&format!("未定义的函数 \"{}\"", func_name), &func_name, span);
                 TypedExpr {
                     kind: TypedExprKind::Call {
                         func_name: func_name.clone(),
@@ -967,10 +971,11 @@ impl Checker {
         func_name: &str,
         typed_args: &[TypedExpr],
         arg_types: &[KangType],
+        span: Range<usize>,
     ) -> TypedExpr {
         // A5: len 参数必须是 str 或数组
         if arg_types.len() != 1 {
-            self.error("len() 接受 1 个参数 (str 或数组)", "");
+            self.error("len() 接受 1 个参数 (str 或数组)", "", span);
             return TypedExpr {
                 kind: TypedExprKind::Call {
                     func_name: func_name.to_string(),
@@ -990,7 +995,7 @@ impl Checker {
                         arg_types[0]
                     ),
                     "",
-                );
+                span);
             }
         }
         TypedExpr {
@@ -1008,10 +1013,11 @@ impl Checker {
         func_name: &str,
         typed_args: &[TypedExpr],
         arg_types: &[KangType],
+        span: Range<usize>,
     ) -> TypedExpr {
         // A4: push 第一个参数必须是数组
         if arg_types.len() != 2 {
-            self.error("push() 接受 2 个参数: ([T], T)", "");
+            self.error("push() 接受 2 个参数: ([T], T)", "", span);
             return TypedExpr {
                 kind: TypedExprKind::Call {
                     func_name: func_name.to_string(),
@@ -1030,7 +1036,7 @@ impl Checker {
                             elem, arg_types[1]
                         ),
                         "",
-                    );
+                    span);
                 } else {
                     self.passes += 1;
                 }
@@ -1039,7 +1045,7 @@ impl Checker {
                 self.error(
                     &format!("push() 第一个参数必须是数组，得到 {} (A4)", arg_types[0]),
                     "",
-                );
+                span);
             }
         }
         TypedExpr {
@@ -1052,7 +1058,7 @@ impl Checker {
     }
 
     // 索引
-    fn check_index(&mut self, array: &ast::Expr, index: &ast::Expr) -> TypedExpr {
+    fn check_index(&mut self, array: &ast::Expr, index: &ast::Expr, span: Range<usize>) -> TypedExpr {
         let arr_typed = self.check_expr(array, None);
         let idx_typed = self.check_expr(index, Some(KangType::I32));
 
@@ -1061,7 +1067,7 @@ impl Checker {
             self.error(
                 &format!("索引必须是 i32 类型，得到 {} (T9/T10)", idx_typed.ty),
                 "",
-            );
+            span.clone());
         } else {
             self.passes += 1;
         }
@@ -1071,7 +1077,7 @@ impl Checker {
             KangType::Str => KangType::Str,
             KangType::Array(elem) => *elem.clone(),
             _ => {
-                self.error(&format!("不能对 {} 类型使用索引", arr_typed.ty), "");
+                self.error(&format!("不能对 {} 类型使用索引", arr_typed.ty), "", span);
                 KangType::I32
             }
         };
@@ -1086,7 +1092,7 @@ impl Checker {
     }
 
     // 字段访问
-    fn check_field_access(&mut self, obj: &ast::Expr, field: &str) -> TypedExpr {
+    fn check_field_access(&mut self, obj: &ast::Expr, field: &str, span: Range<usize>) -> TypedExpr {
         let obj_typed = self.check_expr(obj, None);
 
         match &obj_typed.ty {
@@ -1112,12 +1118,12 @@ impl Checker {
                             name, field
                         ),
                         field,
-                    );
+                    span);
                 } else {
                     self.error(
                         &format!("未定义的结构体类型 \"{}\" (ST5)", name),
                         name,
-                    );
+                    span);
                 }
             }
             _ => {
@@ -1125,7 +1131,7 @@ impl Checker {
                 self.error(
                     &format!("非结构体类型 {} 不能使用 .field 访问 (ST6)", obj_typed.ty),
                     field,
-                );
+                span);
             }
         }
 
@@ -1143,6 +1149,7 @@ impl Checker {
         &mut self,
         elems: &[ast::Expr],
         expected_type: Option<KangType>,
+        span: Range<usize>,
     ) -> TypedExpr {
         if elems.is_empty() {
             // 空数组: 需要从上下文推断元素类型
@@ -1154,7 +1161,7 @@ impl Checker {
                 .unwrap_or(KangType::I32);
             // A1: [void] 检查
             if elem_ty == KangType::Void {
-                self.error("数组元素类型不能是 void (A1)", "");
+                self.error("数组元素类型不能是 void (A1)", "", span.clone());
             } else {
                 self.passes += 1;
             }
@@ -1179,7 +1186,7 @@ impl Checker {
                         te.ty
                     ),
                     "",
-                );
+                span.clone());
             }
         }
         if all_same {
@@ -1188,7 +1195,7 @@ impl Checker {
 
         // A1: [void] 检查
         if first_ty == KangType::Void {
-            self.error("数组元素类型不能是 void (A1)", "");
+            self.error("数组元素类型不能是 void (A1)", "", span);
         }
 
         TypedExpr {
@@ -1202,6 +1209,7 @@ impl Checker {
         &mut self,
         name: &str,
         fields: &[(String, ast::Expr)],
+        span: Range<usize>,
     ) -> TypedExpr {
         // ST5: 结构体类型必须已定义
         let struct_info = match self.structs.get(name) {
@@ -1210,7 +1218,7 @@ impl Checker {
                 self.error(
                     &format!("未定义的结构体类型 \"{}\" (ST5)", name),
                     name,
-                );
+                span);
                 return TypedExpr {
                     kind: TypedExprKind::StructLit {
                         name: name.to_string(),
@@ -1234,7 +1242,7 @@ impl Checker {
                         name, df
                     ),
                     df,
-                );
+                span.clone());
             }
         }
 
@@ -1247,7 +1255,7 @@ impl Checker {
                         name, pf
                     ),
                     pf,
-                );
+                span.clone());
             }
         }
 
@@ -1269,7 +1277,7 @@ impl Checker {
                                 fname, et, tf.ty
                             ),
                             fname,
-                        );
+                        span.clone());
                     } else {
                         self.passes += 1;
                     }
@@ -1289,7 +1297,7 @@ impl Checker {
 
     // ── 错误辅助 ───────────────────────────────────────────────────────────
 
-    fn error(&mut self, msg: &str, context: &str) {
+    fn error(&mut self, msg: &str, context: &str, span: Range<usize>) {
         self.failures += 1;
         let full_msg = if context.is_empty() {
             msg.to_string()
@@ -1300,7 +1308,7 @@ impl Checker {
             msg: full_msg,
             line: 0,
             col: 0,
-            span: Range { start: 0, end: 0 },
+            span,
         });
     }
 }

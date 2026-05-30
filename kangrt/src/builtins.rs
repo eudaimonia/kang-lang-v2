@@ -249,6 +249,32 @@ pub unsafe extern "C" fn k_file_size(path: *const u8, path_len: i32) -> KI32Bool
     }
 }
 
+// ── 字符串操作 ──────────────────────────────────────────────────────────────────
+
+/// str_concat(a: str, b: str) -> str — 拼接两个字符串到 arena
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn k_str_concat(
+    a_ptr: *const u8,
+    a_len: i32,
+    b_ptr: *const u8,
+    b_len: i32,
+) -> KPtrLen {
+    unsafe {
+        let safe_a_len = if a_len < 0 { 0 } else { a_len };
+        let safe_b_len = if b_len < 0 { 0 } else { b_len };
+        let total = safe_a_len + safe_b_len;
+        let buf = k_arena_alloc(total as usize + 1);
+        if safe_a_len > 0 && !a_ptr.is_null() {
+            memcpy(buf, a_ptr, safe_a_len as usize);
+        }
+        if safe_b_len > 0 && !b_ptr.is_null() {
+            memcpy(buf.add(safe_a_len as usize), b_ptr, safe_b_len as usize);
+        }
+        *buf.add(total as usize) = 0;
+        KPtrLen { ptr: buf, len: total }
+    }
+}
+
 // ── 类型转换 ────────────────────────────────────────────────────────────────────
 
 /// str(n: i32) -> str — snprintf 到 arena

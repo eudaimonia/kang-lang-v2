@@ -134,9 +134,18 @@ impl<'ctx> CodeGenContext<'ctx> {
         func
     }
 
-    /// 查找已声明的函数
+    /// 注册外部函数的别名映射（Kang 名称 → LLVM 名称）
+    pub fn register_func_alias(&mut self, kang_name: &str, llvm_func: FunctionValue<'ctx>) {
+        self.declared_funcs.insert(kang_name.to_string(), llvm_func);
+    }
+
+    /// 查找已声明的函数，优先精确匹配，其次尝试 k_ 前缀（内置函数）
     pub fn lookup_func(&self, name: &str) -> Option<FunctionValue<'ctx>> {
         self.declared_funcs.get(name).copied()
+            .or_else(|| {
+                let k_name = format!("k_{}", name);
+                self.declared_funcs.get(&k_name).copied()
+            })
     }
 
     // ── 类型映射 ────────────────────────────────────────────────────────────

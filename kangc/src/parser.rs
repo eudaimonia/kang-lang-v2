@@ -7,7 +7,10 @@ use crate::error::ParseError;
 use crate::lexer::{Token, TokenKind};
 use crate::stats::ParseStats;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::time::Instant;
+
+const MAX_TOKEN_COUNT: usize = 1_000_000;
 
 // 最大嵌套深度，防止恶意输入导致栈溢出
 const MAX_PARSE_DEPTH: usize = 256;
@@ -82,6 +85,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn current_span(&self) -> Range<usize> {
+        self.peek().span.clone()
+    }
+
     fn error(&self, msg: String) -> ParseError {
         let t = self.peek();
         ParseError {
@@ -150,7 +157,7 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_and_expr()?;
         while self.match_kw(&TokenKind::OrOr) {
             let right = self.parse_and_expr()?;
-            left = Expr::Binary { left: Box::new(left), op: BinOp::Or, right: Box::new(right) };
+            left = Expr::Binary { left: Box::new(left), op: BinOp::Or, right: Box::new(right), span: self.current_span() };
         }
         Ok(left)
     }
@@ -160,7 +167,7 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_eq_expr()?;
         while self.match_kw(&TokenKind::AndAnd) {
             let right = self.parse_eq_expr()?;
-            left = Expr::Binary { left: Box::new(left), op: BinOp::And, right: Box::new(right) };
+            left = Expr::Binary { left: Box::new(left), op: BinOp::And, right: Box::new(right), span: self.current_span() };
         }
         Ok(left)
     }
@@ -175,7 +182,7 @@ impl<'a> Parser<'a> {
                 _ => break,
             };
             let right = self.parse_cmp_expr()?;
-            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right), span: self.current_span() };
         }
         Ok(left)
     }
@@ -192,7 +199,7 @@ impl<'a> Parser<'a> {
                 _ => break,
             };
             let right = self.parse_add_expr()?;
-            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right), span: self.current_span() };
         }
         Ok(left)
     }
@@ -207,7 +214,7 @@ impl<'a> Parser<'a> {
                 _ => break,
             };
             let right = self.parse_mul_expr()?;
-            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right), span: self.current_span() };
         }
         Ok(left)
     }
@@ -222,7 +229,7 @@ impl<'a> Parser<'a> {
                 _ => break,
             };
             let right = self.parse_unary_expr()?;
-            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right), span: self.current_span() };
         }
         Ok(left)
     }
@@ -231,10 +238,10 @@ impl<'a> Parser<'a> {
     fn parse_unary_expr(&mut self) -> Result<Expr, ParseError> {
         if self.match_kw(&TokenKind::Minus) {
             let expr = self.parse_unary_expr()?;
-            Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(expr) })
+            Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(expr), span: self.current_span() })
         } else if self.match_kw(&TokenKind::Bang) {
             let expr = self.parse_unary_expr()?;
-            Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(expr) })
+            Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(expr), span: self.current_span() })
         } else {
             self.parse_postfix_expr()
         }
@@ -249,18 +256,18 @@ impl<'a> Parser<'a> {
                     self.advance();
                     let args = self.parse_args()?;
                     self.expect(&TokenKind::RParen)?;
-                    expr = Expr::Call { func: Box::new(expr), args };
+                    expr = Expr::Call { func: Box::new(expr), args, span: self.current_span() };
                 }
                 TokenKind::LBracket => {
                     self.advance();
                     let index = self.parse_expr()?;
                     self.expect(&TokenKind::RBracket)?;
-                    expr = Expr::Index { array: Box::new(expr), index: Box::new(index) };
+                    expr = Expr::Index { array: Box::new(expr), index: Box::new(index), span: self.current_span() };
                 }
                 TokenKind::Dot => {
                     self.advance();
                     let field = self.expect_ident()?;
-                    expr = Expr::FieldAccess { obj: Box::new(expr), field };
+                    expr = Expr::FieldAccess { obj: Box::new(expr), field, span: self.current_span() };
                 }
                 _ => break,
             }
@@ -275,20 +282,20 @@ impl<'a> Parser<'a> {
             TokenKind::IntLit(v) => {
                 let val = v.clone();
                 self.advance();
-                Ok(Expr::IntLit(val))
+                Ok(Expr::IntLit(val, self.current_span()))
             }
             TokenKind::FloatLit(v) => {
                 let val = v.clone();
                 self.advance();
-                Ok(Expr::FloatLit(val))
+                Ok(Expr::FloatLit(val, self.current_span()))
             }
             TokenKind::StrLit(v) => {
                 let val = v.clone();
                 self.advance();
-                Ok(Expr::StrLit(val))
+                Ok(Expr::StrLit(val, self.current_span()))
             }
-            TokenKind::True => { self.advance(); Ok(Expr::BoolLit(true)) }
-            TokenKind::False => { self.advance(); Ok(Expr::BoolLit(false)) }
+            TokenKind::True => { self.advance(); Ok(Expr::BoolLit(true, self.current_span())) }
+            TokenKind::False => { self.advance(); Ok(Expr::BoolLit(false, self.current_span())) }
             TokenKind::Ident(name) => {
                 let n = name.clone();
                 self.advance();
@@ -296,7 +303,7 @@ impl<'a> Parser<'a> {
                 if self.peek_kind() == &TokenKind::LBrace {
                     self.parse_struct_lit_tail(&n)
                 } else {
-                    Ok(Expr::Ident(n))
+                    Ok(Expr::Ident(n, self.current_span()))
                 }
             }
             // 类型名也可作为函数名出现在调用表达式中 (如 i32("42"))
@@ -308,7 +315,7 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let elems = self.parse_args()?;
                 self.expect(&TokenKind::RBracket)?;
-                Ok(Expr::ArrayLit(elems))
+                Ok(Expr::ArrayLit(elems, self.current_span()))
             }
             TokenKind::LParen => {
                 self.advance();
@@ -328,7 +335,7 @@ impl<'a> Parser<'a> {
         if self.peek_kind() == &TokenKind::LBrace {
             self.parse_struct_lit_tail(name)
         } else {
-            Ok(Expr::Ident(name.to_string()))
+            Ok(Expr::Ident(name.to_string(), self.current_span()))
         }
     }
 
@@ -341,7 +348,7 @@ impl<'a> Parser<'a> {
             self.parse_field_inits()?
         };
         self.expect(&TokenKind::RBrace)?;
-        Ok(Expr::StructLit { name: name.to_string(), fields })
+        Ok(Expr::StructLit { name: name.to_string(), fields, span: self.current_span() })
     }
 
     // FieldInits = FieldInit { "," FieldInit }
@@ -407,7 +414,7 @@ impl<'a> Parser<'a> {
                 stmts.push(self.parse_stmt()?);
             }
             self.expect(&TokenKind::RBrace)?;
-            Ok(Stmt::Block(stmts))
+            Ok(Stmt::Block(stmts, self.current_span()))
         })();
         self.leave_depth();
         result
@@ -423,7 +430,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Assign)?;
         let init = self.parse_expr()?;
         self.expect(&TokenKind::Semi)?;
-        Ok(Stmt::VarDecl { bindings, init: Box::new(init) })
+        Ok(Stmt::VarDecl { bindings, init: Box::new(init), span: self.current_span() })
     }
 
     // VarBinding = IDENT ":" Type | "_"
@@ -453,12 +460,12 @@ impl<'a> Parser<'a> {
             let value = self.parse_expr()?;
             self.expect(&TokenKind::Semi)?;
             let lvalue = expr_to_lvalue(expr, mark, self.tokens)?;
-            return Ok(Stmt::Assign { lvalue, value: Box::new(value) });
+            return Ok(Stmt::Assign { lvalue, value: Box::new(value), span: self.current_span() });
         }
 
         // 否则是表达式语句，需要分号
         self.expect(&TokenKind::Semi)?;
-        Ok(Stmt::Expr(Box::new(expr)))
+        Ok(Stmt::Expr(Box::new(expr), self.current_span()))
     }
 
     // ReturnStmt = "return" [ Expr [ "," Expr ] ] ";"
@@ -474,7 +481,7 @@ impl<'a> Parser<'a> {
             vals
         };
         self.expect(&TokenKind::Semi)?;
-        Ok(Stmt::Return { values })
+        Ok(Stmt::Return { values, span: self.current_span() })
     }
 
     // IfStmt = "if" Expr "then" Stmt [ "else" Stmt ]
@@ -488,7 +495,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        Ok(Stmt::If { condition: Box::new(condition), then_branch: Box::new(then_branch), else_branch })
+        Ok(Stmt::If { condition: Box::new(condition), then_branch: Box::new(then_branch), else_branch, span: self.current_span() })
     }
 
     // ForStmt = "for" "var" IDENT ":" Type "=" Expr ","
@@ -522,6 +529,7 @@ impl<'a> Parser<'a> {
             step_lvalue,
             step_expr: Box::new(step_val),
             body: Box::new(body),
+            span: self.current_span(),
         })
     }
 
@@ -559,7 +567,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Arrow)?;
         let return_type = self.parse_return_type()?;
         let body = match self.parse_block()? {
-            Stmt::Block(stmts) => stmts,
+            Stmt::Block(stmts, ..) => stmts,
             _ => unreachable!(),
         };
         Ok(FuncDef { name, params, return_type, body })
@@ -621,9 +629,9 @@ impl<'a> Parser<'a> {
 /// 语法层在此检查 LValue 形式合法性(AS3/AS4)，不合法的左值在解析阶段直接拒绝
 fn expr_to_lvalue(expr: Expr, mark: usize, tokens: &[Token]) -> Result<LValue, ParseError> {
     match expr {
-        Expr::Ident(name) => Ok(LValue::Ident(name)),
-        Expr::Index { array, index } => Ok(LValue::Index { array, index }),
-        Expr::FieldAccess { obj, field } => Ok(LValue::FieldAccess { obj, field }),
+        Expr::Ident(name, ..) => Ok(LValue::Ident(name, tokens[mark].span.clone())),
+        Expr::Index { array, index , ..} => Ok(LValue::Index { array, index, span: tokens[mark].span.clone() }),
+        Expr::FieldAccess { obj, field , ..} => Ok(LValue::FieldAccess { obj, field, span: tokens[mark].span.clone() }),
         _ => {
             let t = &tokens[mark];
             Err(ParseError {
@@ -644,31 +652,31 @@ fn ast_depth(program: &Program) -> usize {
         match e {
             Expr::Binary { left, right, .. } => 1 + expr_depth(left).max(expr_depth(right)),
             Expr::Unary { expr, .. } => 1 + expr_depth(expr),
-            Expr::Call { func, args } => {
+            Expr::Call { func, args , ..} => {
                 let arg_max = args.iter().map(|a| expr_depth(a)).max().unwrap_or(0);
                 1 + expr_depth(func).max(arg_max)
             }
-            Expr::Index { array, index } => 1 + expr_depth(array).max(expr_depth(index)),
+            Expr::Index { array, index , ..} => 1 + expr_depth(array).max(expr_depth(index)),
             Expr::FieldAccess { obj, .. } => 1 + expr_depth(obj),
             Expr::StructLit { fields, .. } => {
                 1 + fields.iter().map(|(_, v)| expr_depth(v)).max().unwrap_or(0)
             }
-            Expr::ArrayLit(elems) => {
+            Expr::ArrayLit(elems, ..) => {
                 1 + elems.iter().map(|e| expr_depth(e)).max().unwrap_or(0)
             }
-            Expr::IntLit(_) | Expr::FloatLit(_) | Expr::StrLit(_)
-            | Expr::BoolLit(_) | Expr::Ident(_) => 1,
+            Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StrLit(..)
+            | Expr::BoolLit(..) | Expr::Ident(..) => 1,
         }
     }
 
     fn stmt_depth(s: &Stmt) -> usize {
         match s {
-            Stmt::VarDecl { bindings: _, init } => 1 + expr_depth(init),
-            Stmt::Assign { lvalue: _, value } => 1 + expr_depth(value),
-            Stmt::Return { values } => {
+            Stmt::VarDecl { bindings: _, init , ..} => 1 + expr_depth(init),
+            Stmt::Assign { lvalue: _, value , ..} => 1 + expr_depth(value),
+            Stmt::Return { values , ..} => {
                 1 + values.iter().map(|v| expr_depth(v)).max().unwrap_or(0)
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If { condition, then_branch, else_branch , ..} => {
                 let else_d = else_branch.as_ref().map(|s| stmt_depth(s)).unwrap_or(0);
                 1 + expr_depth(condition).max(stmt_depth(then_branch)).max(else_d)
             }
@@ -677,8 +685,8 @@ fn ast_depth(program: &Program) -> usize {
                     .max(expr_depth(step_expr))
                     .max(stmt_depth(body))
             }
-            Stmt::Expr(e) => 1 + expr_depth(e),
-            Stmt::Block(stmts) => {
+            Stmt::Expr(e, ..) => 1 + expr_depth(e),
+            Stmt::Block(stmts, ..) => {
                 1 + stmts.iter().map(|s| stmt_depth(s)).max().unwrap_or(0)
             }
         }
@@ -712,19 +720,19 @@ fn count_nodes(program: &Program) -> HashMap<String, usize> {
 fn count_stmt_nodes(stmts: &[Stmt], counts: &mut HashMap<String, usize>) {
     for s in stmts {
         match s {
-            Stmt::VarDecl { bindings: _, init } => {
+            Stmt::VarDecl { bindings: _, init , ..} => {
                 *counts.entry("var-decl".into()).or_insert(0) += 1;
                 count_expr_nodes(init, counts);
             }
-            Stmt::Assign { lvalue: _, value } => {
+            Stmt::Assign { lvalue: _, value , ..} => {
                 *counts.entry("assign".into()).or_insert(0) += 1;
                 count_expr_nodes(value, counts);
             }
-            Stmt::Return { values } => {
+            Stmt::Return { values , ..} => {
                 *counts.entry("return".into()).or_insert(0) += 1;
                 for v in values { count_expr_nodes(v, counts); }
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If { condition, then_branch, else_branch , ..} => {
                 *counts.entry("if".into()).or_insert(0) += 1;
                 count_expr_nodes(condition, counts);
                 count_stmt_nodes(std::slice::from_ref(then_branch), counts);
@@ -739,11 +747,11 @@ fn count_stmt_nodes(stmts: &[Stmt], counts: &mut HashMap<String, usize>) {
                 count_expr_nodes(step_expr, counts);
                 count_stmt_nodes(std::slice::from_ref(body), counts);
             }
-            Stmt::Expr(e) => {
+            Stmt::Expr(e, ..) => {
                 *counts.entry("expr-stmt".into()).or_insert(0) += 1;
                 count_expr_nodes(e, counts);
             }
-            Stmt::Block(inner) => {
+            Stmt::Block(inner, ..) => {
                 *counts.entry("block".into()).or_insert(0) += 1;
                 count_stmt_nodes(inner, counts);
             }
@@ -762,12 +770,12 @@ fn count_expr_nodes(e: &Expr, counts: &mut HashMap<String, usize>) {
             *counts.entry("unary".into()).or_insert(0) += 1;
             count_expr_nodes(expr, counts);
         }
-        Expr::Call { func, args } => {
+        Expr::Call { func, args , ..} => {
             *counts.entry("call".into()).or_insert(0) += 1;
             count_expr_nodes(func, counts);
             for a in args { count_expr_nodes(a, counts); }
         }
-        Expr::Index { array, index } => {
+        Expr::Index { array, index , ..} => {
             *counts.entry("index".into()).or_insert(0) += 1;
             count_expr_nodes(array, counts);
             count_expr_nodes(index, counts);
@@ -776,12 +784,12 @@ fn count_expr_nodes(e: &Expr, counts: &mut HashMap<String, usize>) {
             *counts.entry("field-access".into()).or_insert(0) += 1;
             count_expr_nodes(obj, counts);
         }
-        Expr::IntLit(_) => { *counts.entry("int-lit".into()).or_insert(0) += 1; }
-        Expr::FloatLit(_) => { *counts.entry("float-lit".into()).or_insert(0) += 1; }
-        Expr::StrLit(_) => { *counts.entry("str-lit".into()).or_insert(0) += 1; }
-        Expr::BoolLit(_) => { *counts.entry("bool-lit".into()).or_insert(0) += 1; }
-        Expr::Ident(_) => { *counts.entry("ident".into()).or_insert(0) += 1; }
-        Expr::ArrayLit(elems) => {
+        Expr::IntLit(_, ..) => { *counts.entry("int-lit".into()).or_insert(0) += 1; }
+        Expr::FloatLit(_, ..) => { *counts.entry("float-lit".into()).or_insert(0) += 1; }
+        Expr::StrLit(_, ..) => { *counts.entry("str-lit".into()).or_insert(0) += 1; }
+        Expr::BoolLit(_, ..) => { *counts.entry("bool-lit".into()).or_insert(0) += 1; }
+        Expr::Ident(_, ..) => { *counts.entry("ident".into()).or_insert(0) += 1; }
+        Expr::ArrayLit(elems, ..) => {
             *counts.entry("array-lit".into()).or_insert(0) += 1;
             for e in elems { count_expr_nodes(e, counts); }
         }
@@ -796,6 +804,14 @@ fn count_expr_nodes(e: &Expr, counts: &mut HashMap<String, usize>) {
 
 /// 将 token 流解析为 AST，同时收集统计数据
 pub fn parse(tokens: &[Token], stats: &mut ParseStats) -> Result<Program, ParseError> {
+    if tokens.len() > MAX_TOKEN_COUNT {
+        return Err(ParseError {
+            msg: format!("token 数量 {} 超过限制 {}", tokens.len(), MAX_TOKEN_COUNT),
+            line: 0,
+            col: 0,
+            span: 0..0,
+        });
+    }
     let start = Instant::now();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program()?;
@@ -815,6 +831,8 @@ pub fn parse(tokens: &[Token], stats: &mut ParseStats) -> Result<Program, ParseE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const S: std::ops::Range<usize> = 0..1;
     use crate::lexer::{self, LexStats};
     use std::collections::HashMap;
 
@@ -850,7 +868,7 @@ mod tests {
         let program = parse_source(&full)?;
         match &program.items[0] {
             TopLevel::Func(f) => match &f.body[0] {
-                Stmt::Return { values } => Ok(values[0].clone()),
+                Stmt::Return { values , ..} => Ok(values[0].clone()),
                 _ => unreachable!(),
             },
             _ => unreachable!(),
@@ -899,12 +917,12 @@ mod tests {
 
     // ── 表达式: 字面量 ───────────────────────────────────────────────────
 
-    #[test] fn expr_int_lit()    { assert_eq!(parse_expr("42").unwrap(), Expr::IntLit("42".into())); }
-    #[test] fn expr_float_lit()  { assert_eq!(parse_expr("3.14").unwrap(), Expr::FloatLit("3.14".into())); }
-    #[test] fn expr_str_lit()    { assert_eq!(parse_expr("\"hi\"").unwrap(), Expr::StrLit("hi".into())); }
-    #[test] fn expr_true()       { assert_eq!(parse_expr("true").unwrap(), Expr::BoolLit(true)); }
-    #[test] fn expr_false()      { assert_eq!(parse_expr("false").unwrap(), Expr::BoolLit(false)); }
-    #[test] fn expr_ident()      { assert_eq!(parse_expr("x").unwrap(), Expr::Ident("x".into())); }
+    #[test] fn expr_int_lit()    { assert_eq!(parse_expr("42").unwrap(), Expr::IntLit("42".into(), S)); }
+    #[test] fn expr_float_lit()  { assert_eq!(parse_expr("3.14").unwrap(), Expr::FloatLit("3.14".into(), S)); }
+    #[test] fn expr_str_lit()    { assert_eq!(parse_expr("\"hi\"").unwrap(), Expr::StrLit("hi".into(), S)); }
+    #[test] fn expr_true()       { assert_eq!(parse_expr("true").unwrap(), Expr::BoolLit(true, S)); }
+    #[test] fn expr_false()      { assert_eq!(parse_expr("false").unwrap(), Expr::BoolLit(false, S)); }
+    #[test] fn expr_ident()      { assert_eq!(parse_expr("x").unwrap(), Expr::Ident("x".into(), S)); }
 
     // ── 表达式: 二元运算符(优先级) ────────────────────────────────────────
 
@@ -913,10 +931,10 @@ mod tests {
         assert_eq!(
             parse_expr("a + b").unwrap(),
             Expr::Binary {
-                left: Box::new(Expr::Ident("a".into())),
+                left: Box::new(Expr::Ident("a".into(), S)),
                 op: BinOp::Add,
-                right: Box::new(Expr::Ident("b".into())),
-            }
+                right: Box::new(Expr::Ident("b".into(), S)),
+             span: S,}
         );
     }
 
@@ -927,14 +945,14 @@ mod tests {
         assert_eq!(
             e,
             Expr::Binary {
-                left: Box::new(Expr::Ident("a".into())),
+                left: Box::new(Expr::Ident("a".into(), S)),
                 op: BinOp::Add,
                 right: Box::new(Expr::Binary {
-                    left: Box::new(Expr::Ident("b".into())),
+                    left: Box::new(Expr::Ident("b".into(), S)),
                     op: BinOp::Mul,
-                    right: Box::new(Expr::Ident("c".into())),
-                }),
-            }
+                    right: Box::new(Expr::Ident("c".into(), S)),
+                 span: S,}),
+             span: S,}
         );
     }
 
@@ -946,13 +964,13 @@ mod tests {
             e,
             Expr::Binary {
                 left: Box::new(Expr::Binary {
-                    left: Box::new(Expr::Ident("a".into())),
+                    left: Box::new(Expr::Ident("a".into(), S)),
                     op: BinOp::Mul,
-                    right: Box::new(Expr::Ident("b".into())),
-                }),
+                    right: Box::new(Expr::Ident("b".into(), S)),
+                 span: S,}),
                 op: BinOp::Add,
-                right: Box::new(Expr::Ident("c".into())),
-            }
+                right: Box::new(Expr::Ident("c".into(), S)),
+             span: S,}
         );
     }
 
@@ -964,13 +982,13 @@ mod tests {
             e,
             Expr::Binary {
                 left: Box::new(Expr::Binary {
-                    left: Box::new(Expr::Ident("a".into())),
+                    left: Box::new(Expr::Ident("a".into(), S)),
                     op: BinOp::Add,
-                    right: Box::new(Expr::Ident("b".into())),
-                }),
+                    right: Box::new(Expr::Ident("b".into(), S)),
+                 span: S,}),
                 op: BinOp::Mul,
-                right: Box::new(Expr::Ident("c".into())),
-            }
+                right: Box::new(Expr::Ident("c".into(), S)),
+             span: S,}
         );
     }
 
@@ -980,13 +998,13 @@ mod tests {
         let e = parse_expr("a < b == true").unwrap();
         assert_eq!(e, Expr::Binary {
             left: Box::new(Expr::Binary {
-                left: Box::new(Expr::Ident("a".into())),
+                left: Box::new(Expr::Ident("a".into(), S)),
                 op: BinOp::Lt,
-                right: Box::new(Expr::Ident("b".into())),
-            }),
+                right: Box::new(Expr::Ident("b".into(), S)),
+             span: S,}),
             op: BinOp::Eq,
-            right: Box::new(Expr::BoolLit(true)),
-        });
+            right: Box::new(Expr::BoolLit(true, S)),
+         span: S,});
     }
 
     #[test]
@@ -994,14 +1012,14 @@ mod tests {
         // x || y && false  ≡  x || (y && false)
         let e = parse_expr("x || y && false").unwrap();
         assert_eq!(e, Expr::Binary {
-            left: Box::new(Expr::Ident("x".into())),
+            left: Box::new(Expr::Ident("x".into(), S)),
             op: BinOp::Or,
             right: Box::new(Expr::Binary {
-                left: Box::new(Expr::Ident("y".into())),
+                left: Box::new(Expr::Ident("y".into(), S)),
                 op: BinOp::And,
-                right: Box::new(Expr::BoolLit(false)),
-            }),
-        });
+                right: Box::new(Expr::BoolLit(false, S)),
+             span: S,}),
+         span: S,});
     }
 
     #[test]
@@ -1009,13 +1027,13 @@ mod tests {
         // a < b < c  ≡  (a < b) < c  (左结合)
         let e = parse_expr("a < b < c").unwrap();
         match e {
-            Expr::Binary { left, op: BinOp::Lt, right } => {
+            Expr::Binary { left, op: BinOp::Lt, right , ..} => {
                 assert_eq!(*left, Expr::Binary {
-                    left: Box::new(Expr::Ident("a".into())),
+                    left: Box::new(Expr::Ident("a".into(), S)),
                     op: BinOp::Lt,
-                    right: Box::new(Expr::Ident("b".into())),
-                });
-                assert_eq!(*right, Expr::Ident("c".into()));
+                    right: Box::new(Expr::Ident("b".into(), S)),
+                 span: S,});
+                assert_eq!(*right, Expr::Ident("c".into(), S));
             }
             _ => panic!("expected binary"),
         }
@@ -1027,7 +1045,8 @@ mod tests {
     fn expr_neg() {
         assert_eq!(
             parse_expr("-a").unwrap(),
-            Expr::Unary { op: UnaryOp::Neg, expr: Box::new(Expr::Ident("a".into())) }
+            Expr::Unary { op: UnaryOp::Neg, expr: Box::new(Expr::Ident("a".into(), S)) ,
+                    span: S}
         );
     }
 
@@ -1035,7 +1054,8 @@ mod tests {
     fn expr_not() {
         assert_eq!(
             parse_expr("!x").unwrap(),
-            Expr::Unary { op: UnaryOp::Not, expr: Box::new(Expr::Ident("x".into())) }
+            Expr::Unary { op: UnaryOp::Not, expr: Box::new(Expr::Ident("x".into(), S)) ,
+                    span: S}
         );
     }
 
@@ -1047,9 +1067,9 @@ mod tests {
                 op: UnaryOp::Neg,
                 expr: Box::new(Expr::Unary {
                     op: UnaryOp::Neg,
-                    expr: Box::new(Expr::IntLit("42".into())),
-                }),
-            }
+                    expr: Box::new(Expr::IntLit("42".into(), S)),
+                 span: S,}),
+             span: S,}
         );
     }
 
@@ -1060,11 +1080,11 @@ mod tests {
         assert_eq!(e, Expr::Binary {
             left: Box::new(Expr::Unary {
                 op: UnaryOp::Neg,
-                expr: Box::new(Expr::Ident("a".into())),
-            }),
+                expr: Box::new(Expr::Ident("a".into(), S)),
+             span: S,}),
             op: BinOp::Mul,
-            right: Box::new(Expr::Ident("b".into())),
-        });
+            right: Box::new(Expr::Ident("b".into(), S)),
+         span: S,});
     }
 
     // ── 表达式: 后缀操作 ─────────────────────────────────────────────────
@@ -1073,7 +1093,8 @@ mod tests {
     fn expr_call_no_args() {
         assert_eq!(
             parse_expr("f()").unwrap(),
-            Expr::Call { func: Box::new(Expr::Ident("f".into())), args: vec![] }
+            Expr::Call { func: Box::new(Expr::Ident("f".into(), S)), args: vec![] ,
+                    span: S}
         );
     }
 
@@ -1082,8 +1103,9 @@ mod tests {
         assert_eq!(
             parse_expr("f(1)").unwrap(),
             Expr::Call {
-                func: Box::new(Expr::Ident("f".into())),
-                args: vec![Expr::IntLit("1".into())],
+                func: Box::new(Expr::Ident("f".into(), S)),
+                args: vec![Expr::IntLit("1".into(), S)],
+                span: S,
             }
         );
     }
@@ -1092,8 +1114,8 @@ mod tests {
     fn expr_call_multi_args() {
         let e = parse_expr("add(1, 2, 3)").unwrap();
         match e {
-            Expr::Call { func, args } => {
-                assert_eq!(*func, Expr::Ident("add".into()));
+            Expr::Call { func, args , ..} => {
+                assert_eq!(*func, Expr::Ident("add".into(), S));
                 assert_eq!(args.len(), 3);
             }
             _ => panic!("expected call"),
@@ -1105,9 +1127,9 @@ mod tests {
         assert_eq!(
             parse_expr("arr[0]").unwrap(),
             Expr::Index {
-                array: Box::new(Expr::Ident("arr".into())),
-                index: Box::new(Expr::IntLit("0".into())),
-            }
+                array: Box::new(Expr::Ident("arr".into(), S)),
+                index: Box::new(Expr::IntLit("0".into(), S)),
+             span: S,}
         );
     }
 
@@ -1116,9 +1138,9 @@ mod tests {
         assert_eq!(
             parse_expr("obj.field").unwrap(),
             Expr::FieldAccess {
-                obj: Box::new(Expr::Ident("obj".into())),
+                obj: Box::new(Expr::Ident("obj".into(), S)),
                 field: "field".into(),
-            }
+             span: S,}
         );
     }
 
@@ -1128,11 +1150,11 @@ mod tests {
         let e = parse_expr("a.b.c").unwrap();
         assert_eq!(e, Expr::FieldAccess {
             obj: Box::new(Expr::FieldAccess {
-                obj: Box::new(Expr::Ident("a".into())),
+                obj: Box::new(Expr::Ident("a".into(), S)),
                 field: "b".into(),
-            }),
+             span: S,}),
             field: "c".into(),
-        });
+         span: S,});
     }
 
     #[test]
@@ -1143,29 +1165,30 @@ mod tests {
             obj: Box::new(Expr::Call {
                 func: Box::new(Expr::FieldAccess {
                     obj: Box::new(Expr::Call {
-                        func: Box::new(Expr::Ident("f".into())),
+                        func: Box::new(Expr::Ident("f".into(), S)),
                         args: vec![],
-                    }),
+                     span: S,}),
                     field: "g".into(),
-                }),
-                args: vec![Expr::IntLit("1".into())],
+                 span: S,}),
+                args: vec![Expr::IntLit("1".into(), S)],
+                span: S,
             }),
             field: "h".into(),
-        });
+         span: S,});
     }
 
     // ── 表达式: 数组/结构体字面量 ─────────────────────────────────────────
 
     #[test]
     fn expr_array_lit_empty() {
-        assert_eq!(parse_expr("[]").unwrap(), Expr::ArrayLit(vec![]));
+        assert_eq!(parse_expr("[]").unwrap(), Expr::ArrayLit(vec![], S));
     }
 
     #[test]
     fn expr_array_lit_elements() {
         let e = parse_expr("[1, 2, 3]").unwrap();
         match e {
-            Expr::ArrayLit(elems) => assert_eq!(elems.len(), 3),
+            Expr::ArrayLit(elems, _) => assert_eq!(elems.len(), 3),
             _ => panic!("expected array lit"),
         }
     }
@@ -1174,7 +1197,7 @@ mod tests {
     fn expr_struct_lit_empty() {
         let e = parse_expr("Point{}").unwrap();
         match e {
-            Expr::StructLit { name, fields } => {
+            Expr::StructLit { name, fields , ..} => {
                 assert_eq!(name, "Point");
                 assert!(fields.is_empty());
             }
@@ -1186,7 +1209,7 @@ mod tests {
     fn expr_struct_lit_with_fields() {
         let e = parse_expr("Point{x: 1, y: 2}").unwrap();
         match e {
-            Expr::StructLit { name, fields } => {
+            Expr::StructLit { name, fields , ..} => {
                 assert_eq!(name, "Point");
                 assert_eq!(fields.len(), 2);
                 assert_eq!(fields[0].0, "x");
@@ -1202,10 +1225,10 @@ mod tests {
     fn stmt_var_decl_single() {
         let s = parse_stmt("var x:i32 = 42;").unwrap();
         match s {
-            Stmt::VarDecl { bindings, init } => {
+            Stmt::VarDecl { bindings, init , ..} => {
                 assert_eq!(bindings.len(), 1);
                 assert_eq!(bindings[0], VarBinding::Named { name: "x".into(), ty: Type::Base(BaseType::I32) });
-                assert_eq!(*init, Expr::IntLit("42".into()));
+                assert_eq!(*init, Expr::IntLit("42".into(), S));
             }
             _ => panic!("expected var decl"),
         }
@@ -1215,7 +1238,7 @@ mod tests {
     fn stmt_var_decl_double() {
         let s = parse_stmt("var a:i32, b:i32 = f();").unwrap();
         match s {
-            Stmt::VarDecl { bindings, init: _ } => {
+            Stmt::VarDecl { bindings, init: _ , ..} => {
                 assert_eq!(bindings.len(), 2);
                 assert_eq!(bindings[0], VarBinding::Named { name: "a".into(), ty: Type::Base(BaseType::I32) });
                 assert_eq!(bindings[1], VarBinding::Named { name: "b".into(), ty: Type::Base(BaseType::I32) });
@@ -1240,9 +1263,9 @@ mod tests {
     fn stmt_assign() {
         let s = parse_stmt("x = 42;").unwrap();
         match s {
-            Stmt::Assign { lvalue, value } => {
-                assert_eq!(lvalue, LValue::Ident("x".into()));
-                assert_eq!(*value, Expr::IntLit("42".into()));
+            Stmt::Assign { lvalue, value , ..} => {
+                assert_eq!(lvalue, LValue::Ident("x".into(), S));
+                assert_eq!(*value, Expr::IntLit("42".into(), S));
             }
             _ => panic!("expected assign"),
         }
@@ -1254,9 +1277,9 @@ mod tests {
         match s {
             Stmt::Assign { lvalue, .. } => {
                 assert_eq!(lvalue, LValue::Index {
-                    array: Box::new(Expr::Ident("arr".into())),
-                    index: Box::new(Expr::Ident("i".into())),
-                });
+                    array: Box::new(Expr::Ident("arr".into(), S)),
+                    index: Box::new(Expr::Ident("i".into(), S)),
+                 span: S,});
             }
             _ => panic!("expected assign"),
         }
@@ -1268,9 +1291,9 @@ mod tests {
         match s {
             Stmt::Assign { lvalue, .. } => {
                 assert_eq!(lvalue, LValue::FieldAccess {
-                    obj: Box::new(Expr::Ident("obj".into())),
+                    obj: Box::new(Expr::Ident("obj".into(), S)),
                     field: "field".into(),
-                });
+                 span: S,});
             }
             _ => panic!("expected assign"),
         }
@@ -1279,20 +1302,22 @@ mod tests {
     #[test]
     fn stmt_return_void() {
         let s = parse_stmt("return;").unwrap();
-        assert_eq!(s, Stmt::Return { values: vec![] });
+        assert_eq!(s, Stmt::Return { values: vec![] ,
+                    span: S});
     }
 
     #[test]
     fn stmt_return_single() {
         let s = parse_stmt("return 0;").unwrap();
-        assert_eq!(s, Stmt::Return { values: vec![Expr::IntLit("0".into())] });
+        assert_eq!(s, Stmt::Return { values: vec![Expr::IntLit("0".into(), S)], span: S });
     }
 
     #[test]
     fn stmt_return_pair() {
         let s = parse_stmt("return 1, true;").unwrap();
         assert_eq!(s, Stmt::Return {
-            values: vec![Expr::IntLit("1".into()), Expr::BoolLit(true)],
+            values: vec![Expr::IntLit("1".into(), S), Expr::BoolLit(true, S)],
+            span: S,
         });
     }
 
@@ -1300,9 +1325,10 @@ mod tests {
     fn stmt_if_simple() {
         let s = parse_stmt("if x then return;").unwrap();
         match s {
-            Stmt::If { condition, then_branch, else_branch } => {
-                assert_eq!(*condition, Expr::Ident("x".into()));
-                assert_eq!(*then_branch, Stmt::Return { values: vec![] });
+            Stmt::If { condition, then_branch, else_branch , ..} => {
+                assert_eq!(*condition, Expr::Ident("x".into(), S));
+                assert_eq!(*then_branch, Stmt::Return { values: vec![] ,
+                    span: S});
                 assert!(else_branch.is_none());
             }
             _ => panic!("expected if"),
@@ -1313,8 +1339,8 @@ mod tests {
     fn stmt_if_else() {
         let s = parse_stmt("if x then return 0; else return 1;").unwrap();
         match s {
-            Stmt::If { condition, then_branch: _, else_branch } => {
-                assert_eq!(*condition, Expr::Ident("x".into()));
+            Stmt::If { condition, then_branch: _, else_branch , ..} => {
+                assert_eq!(*condition, Expr::Ident("x".into(), S));
                 assert!(else_branch.is_some());
             }
             _ => panic!("expected if"),
@@ -1324,14 +1350,14 @@ mod tests {
     #[test]
     fn stmt_block_empty() {
         let s = parse_stmt("{}").unwrap();
-        assert_eq!(s, Stmt::Block(vec![]));
+        assert_eq!(s, Stmt::Block(vec![], S));
     }
 
     #[test]
     fn stmt_block_multiple() {
         let s = parse_stmt("{ return; return 1; }").unwrap();
         match s {
-            Stmt::Block(stmts) => assert_eq!(stmts.len(), 2),
+            Stmt::Block(stmts, _) => assert_eq!(stmts.len(), 2),
             _ => panic!("expected block"),
         }
     }
@@ -1340,7 +1366,7 @@ mod tests {
     fn stmt_expr_stmt() {
         let s = parse_stmt("puts(\"hi\");").unwrap();
         match s {
-            Stmt::Expr(_) => {} // 仅验证解析不报错
+            Stmt::Expr(_, _) => {} // 仅验证解析不报错
             _ => panic!("expected expr stmt"),
         }
     }
@@ -1350,17 +1376,17 @@ mod tests {
         let source = "for var i:i32 = 0, i < 10, i = i + 1 in { }";
         let s = parse_stmt(source).unwrap();
         match s {
-            Stmt::For { var_name, var_type, start, end, step_lvalue, step_expr: _, body } => {
+            Stmt::For { var_name, var_type, start, end, step_lvalue, step_expr: _, body , ..} => {
                 assert_eq!(var_name, "i");
                 assert_eq!(var_type, Type::Base(BaseType::I32));
-                assert_eq!(*start, Expr::IntLit("0".into()));
+                assert_eq!(*start, Expr::IntLit("0".into(), S));
                 assert_eq!(*end, Expr::Binary {
-                    left: Box::new(Expr::Ident("i".into())),
+                    left: Box::new(Expr::Ident("i".into(), S)),
                     op: BinOp::Lt,
-                    right: Box::new(Expr::IntLit("10".into())),
-                });
-                assert_eq!(step_lvalue, LValue::Ident("i".into()));
-                assert_eq!(*body, Stmt::Block(vec![]));
+                    right: Box::new(Expr::IntLit("10".into(), S)),
+                 span: S,});
+                assert_eq!(step_lvalue, LValue::Ident("i".into(), S));
+                assert_eq!(*body, Stmt::Block(vec![], S));
             }
             _ => panic!("expected for"),
         }
@@ -1423,9 +1449,9 @@ mod tests {
         match &p.items[0] {
             TopLevel::Func(f) => {
                 match &f.body[0] {
-                    Stmt::Block(outer) => {
+                    Stmt::Block(outer, _) => {
                         match &outer[0] {
-                            Stmt::Block(inner) => {
+                            Stmt::Block(inner, _) => {
                                 assert!(matches!(inner[0], Stmt::Return { .. }));
                             }
                             _ => panic!("expected inner block"),
@@ -1479,7 +1505,8 @@ mod tests {
     fn expr_int_negative() {
         // -1 是一元负号作用于 1
         let e = parse_expr("-1").unwrap();
-        assert_eq!(e, Expr::Unary { op: UnaryOp::Neg, expr: Box::new(Expr::IntLit("1".into())) });
+        assert_eq!(e, Expr::Unary { op: UnaryOp::Neg, expr: Box::new(Expr::IntLit("1".into(), S)) ,
+                    span: S});
     }
 
     // ── 错误路径 ─────────────────────────────────────────────────────────
