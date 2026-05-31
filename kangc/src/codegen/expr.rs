@@ -70,6 +70,8 @@ fn codegen_str_lit<'ctx>(ctx: &mut CodeGenContext<'ctx>, s: &str) -> Result<Basi
 
     let array_type = ctx.context.i8_type().array_type(bytes.len() as u32);
     let global = ctx.module.add_global(array_type, None, ".str");
+    // 跨模块链接时避免重复符号冲突: 每个 .o 文件内部生成 .str / .str.1 / ...
+    global.set_linkage(inkwell::module::Linkage::Private);
     let init_vals: Vec<IntValue> = bytes
         .iter()
         .map(|&b| ctx.context.i8_type().const_int(b as u64, false))
@@ -552,8 +554,10 @@ fn codegen_call<'ctx>(
             ctx.declare_func(&resolved_name, &arg_kang_types, return_ty)
         });
 
-    // C ABI 外部函数：将 Kang 复合类型展平为标量参数
-    let llvm_args: Vec<BasicMetadataValueEnum> = if func.get_first_basic_block().is_none() {
+    // 仅对 C ABI 外部函数展平复合类型参数；Kang 跨模块调用保持原样
+    let is_extern = func.get_first_basic_block().is_none();
+    let is_kang = ctx.kang_funcs.contains(&resolved_name);
+    let llvm_args: Vec<BasicMetadataValueEnum> = if is_extern && !is_kang {
         flatten_c_abi_args(ctx, &arg_values, args)?
     } else {
         arg_values.iter().map(|v| (*v).into()).collect()

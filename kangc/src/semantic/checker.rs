@@ -53,6 +53,8 @@ pub struct Checker {
     source_file: Option<String>,
     /// alias → module_name 映射（如 m → math），用于解析 import 调用的代码生成名称
     alias_modules: HashMap<String, String>,
+    /// 从导入模块收集的结构体定义, 注入 TypedProgram 供代码生成使用
+    imported_structs: Vec<ast::StructDef>,
 }
 
 impl Checker {
@@ -68,6 +70,7 @@ impl Checker {
             in_loop: false,
             source_file: file_path.map(|s| s.to_string()),
             alias_modules: HashMap::new(),
+            imported_structs: Vec::new(),
         }
     }
 
@@ -113,6 +116,11 @@ impl Checker {
                     // import 语句由模块系统单独处理，语义检查中跳过
                 }
             }
+        }
+
+        // 将导入模块的结构体定义注入 TypedProgram，供代码生成使用
+        for s in &self.imported_structs {
+            items.push(TypedTopLevel::Struct(s.clone()));
         }
 
         if self.errors.is_empty() {
@@ -221,12 +229,16 @@ impl Checker {
                     let fields: Vec<(String, KangType)> = s.fields.iter().map(|(n, t)|
                         (n.clone(), KangType::from_ast_type(t))
                     ).collect();
+                    // 同时注册原名和限定名: Point 和 g.Point 都可引用
                     self.structs.insert(semantic_name.clone(), super::scope::StructInfo { fields: fields.clone() });
+                    self.structs.entry(s.name.clone()).or_insert(super::scope::StructInfo { fields: fields.clone() });
                     let _ = self.symbols.insert(
                         &semantic_name,
                         super::scope::SymbolKind::Struct(super::scope::StructInfo { fields }),
                         super::scope::ScopeHint::Normal,
                     );
+                    // 记录结构体定义, 注入 TypedProgram 供代码生成
+                    self.imported_structs.push(s.clone());
                 }
                 _ => {
                     self.errors.push(SemanticError {

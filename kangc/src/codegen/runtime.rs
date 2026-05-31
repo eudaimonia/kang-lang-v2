@@ -22,6 +22,7 @@ fn panic_msg_global<'ctx>(
 
     let array_type = ctx.context.i8_type().array_type(msg.len() as u32);
     let global = ctx.module.add_global(array_type, None, name);
+    global.set_linkage(inkwell::module::Linkage::Private);
     let bytes: Vec<IntValue> = msg.iter().map(|&b| ctx.context.i8_type().const_int(b as u64, true)).collect();
     global.set_initializer(&ctx.context.i8_type().const_array(&bytes));
 

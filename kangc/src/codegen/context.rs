@@ -13,7 +13,7 @@ use inkwell::types::StructType;
 use inkwell::values::BasicValueEnum;
 use inkwell::values::FunctionValue;
 use inkwell::values::PointerValue;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Once;
 
 /// 变量存储信息
@@ -47,6 +47,8 @@ pub struct CodeGenContext<'ctx> {
     pub struct_fields: HashMap<String, Vec<(String, KangType)>>,
     // 已声明的外部函数
     declared_funcs: HashMap<String, FunctionValue<'ctx>>,
+    // Kang 跨模块函数名集合 — 这些函数不应走 C ABI 参数展平
+    pub kang_funcs: HashSet<String>,
     // 目标平台数据布局信息（用于类型大小/对齐计算）
     pub target_data: Option<TargetData>,
     // k_panic 函数指针（由 builtins::declare_k_panic 设置，消除按名称查找的时序依赖）
@@ -106,6 +108,7 @@ impl<'ctx> CodeGenContext<'ctx> {
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
             declared_funcs: HashMap::new(),
+            kang_funcs: HashSet::new(),
             panic_func: None,
             runtime_checks: 0,
         }
@@ -187,6 +190,7 @@ impl<'ctx> CodeGenContext<'ctx> {
 
         let func = self.module.add_function(name, fn_type, None);
         self.declared_funcs.insert(name.to_string(), func);
+        self.kang_funcs.insert(name.to_string());
         func
     }
 
