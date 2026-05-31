@@ -94,23 +94,95 @@ fn emit_object_file(
     path: &Path,
 ) -> Result<(), CodeGenError> {
     let triple = TargetTriple::create(triple_str);
-    let target = Target::from_triple(&triple).map_err(|e| CodeGenError {
-        msg: format!("不支持的目标 triple '{}': {:?}", triple_str, e),
-    })?;
-    let machine = target
-        .create_target_machine(
-            &triple,
-            "",
-            "",
+
+    // 尝试内建 LLVM TargetMachine 直接生成 .o
+    if let Ok(target) = Target::from_triple(&triple) {
+        if let Some(machine) = target.create_target_machine(
+            &triple, "", "",
             OptimizationLevel::Default,
             RelocMode::Default,
             CodeModel::Default,
-        )
-        .ok_or_else(|| CodeGenError {
-            msg: format!("无法为 '{}' 创建 TargetMachine", triple_str),
-        })?;
-    machine.write_to_file(module, FileType::Object, path).map_err(|e| CodeGenError {
-        msg: format!("写入目标文件失败 '{}': {:?}", path.display(), e),
+        ) {
+            return machine.write_to_file(module, FileType::Object, path).map_err(|e| {
+                CodeGenError { msg: format!("写入目标文件失败 '{}': {:?}", path.display(), e) }
+            });
+        }
+    }
+
+    // 回退: 输出 .ll 到临时文件，调用外部 llc 生成 .o
+    emit_object_via_llc(module, triple_str, path)
+}
+
+/// 通过外部 llc 工具将 Module 编译为 .o（回退路径，用于内建 LLVM 不支持的 target）
+fn emit_object_via_llc(
+    module: &inkwell::module::Module,
+    triple_str: &str,
+    path: &Path,
+) -> Result<(), CodeGenError> {
+    use std::process::Command;
+
+    let llc = find_llc()?;
+    let ir_text = module.print_to_string().to_string();
+    let ir_path = path.with_extension("ll");
+
+    std::fs::write(&ir_path, &ir_text).map_err(|e| CodeGenError {
+        msg: format!("无法写入临时 IR 文件 '{}': {}", ir_path.display(), e),
+    })?;
+
+    let result = Command::new(&llc)
+        .arg(&ir_path)
+        .arg("-o").arg(path)
+        .arg("-filetype=obj")
+        .arg("--mtriple").arg(triple_str)
+        .status();
+
+    let _ = std::fs::remove_file(&ir_path);
+
+    match result {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(CodeGenError {
+            msg: format!("外部 llc 退出码 {} (target: {})", status.code().unwrap_or(-1), triple_str),
+        }),
+        Err(e) => Err(CodeGenError {
+            msg: format!("无法执行 llc (target: {}): {}", triple_str, e),
+        }),
+    }
+}
+
+/// 查找 llc 可执行文件：LLVM_SYS_XXX_PREFIX → PATH → Homebrew 默认路径
+fn find_llc() -> Result<String, CodeGenError> {
+    use std::path::PathBuf;
+
+    // 检查 LLVM_SYS_220_PREFIX 等通用环境变量
+    for var in &["LLVM_SYS_220_PREFIX", "LLVM_SYS_191_PREFIX", "LLVM_SYS_180_PREFIX"] {
+        if let Ok(prefix) = std::env::var(var) {
+            let path = PathBuf::from(&prefix).join("bin").join("llc");
+            if path.is_file() {
+                return Ok(path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // 检查 PATH
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in path_var.split(':') {
+            let full = PathBuf::from(dir).join("llc");
+            if full.is_file() {
+                return Ok(full.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // 检查 Homebrew LLVM 路径
+    for brew_prefix in &["/opt/homebrew/opt/llvm/bin/llc", "/usr/local/opt/llvm/bin/llc"] {
+        let p = PathBuf::from(brew_prefix);
+        if p.is_file() {
+            return Ok(p.to_string_lossy().to_string());
+        }
+    }
+
+    Err(CodeGenError {
+        msg: "无法找到 llc 工具（内建 LLVM 不支持该 target，且外部 llc 也未找到）".into(),
     })
 }
 

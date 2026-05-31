@@ -1,0 +1,5 @@
+def main() -> i32 {
+    puts("Hello from Kang on Linux x86_64!");
+    print("This binary was cross-compiled on macOS.\n");
+    return 0;
+}

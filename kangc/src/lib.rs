@@ -251,3 +251,167 @@ pub fn find_linker() -> Result<String, String> {
     }
     Ok(canon.to_string_lossy().to_string())
 }
+
+/// 查找交叉链接器 lld（Rust 工具链自带）
+///
+/// 当目标平台的 OS 与宿主不同时（如 macOS → Linux），系统 cc 无法链接，
+/// 需要使用 lld 交叉链接器。
+pub fn find_cross_linker() -> Result<String, String> {
+    // 优先使用 LD 环境变量
+    if let Ok(ld) = std::env::var("LD") {
+        let p = PathBuf::from(&ld);
+        if p.is_file() {
+            return Ok(p.to_string_lossy().to_string());
+        }
+    }
+
+    // 查找 Rust 工具链中的 lld
+    let rustup_home = std::env::var("RUSTUP_HOME").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        format!("{}/.rustup", home)
+    });
+    if let Some(lld) = find_in_dir(&PathBuf::from(&rustup_home), "ld.lld") {
+        return Ok(lld.to_string_lossy().to_string());
+    }
+
+    // 查找 Homebrew 中的 lld
+    for prefix in &["/opt/homebrew/opt/llvm/bin/ld.lld", "/usr/local/opt/llvm/bin/ld.lld"] {
+        let p = PathBuf::from(prefix);
+        if p.is_file() {
+            return Ok(p.to_string_lossy().to_string());
+        }
+    }
+
+    // PATH 中查找
+    if let Some(p) = resolve_from_path("ld.lld") {
+        return Ok(p.to_string_lossy().to_string());
+    }
+
+    Err("无法找到交叉链接器 ld.lld。请安装 LLVM (brew install llvm) 或设置 LD 环境变量".into())
+}
+
+/// 在目录中递归查找文件名匹配的可执行文件（深度限制 4 层）
+fn find_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
+    use std::fs;
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_file() && path.file_name().map_or(false, |n| n == name) {
+            return Some(path);
+        }
+        if path.is_dir() && path.components().count() <= dir.components().count() + 4 {
+            if let Some(found) = find_in_dir(&path, name) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// 从 target triple 提取 OS 类别
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TargetOs {
+    Linux,
+    MacOs,
+    Windows,
+    Unknown,
+}
+
+/// 从 target triple 提取目标 OS
+pub fn target_os_from_triple(triple: &str) -> TargetOs {
+    let t = triple.to_lowercase();
+    if t.contains("linux") { TargetOs::Linux }
+    else if t.contains("apple") || t.contains("darwin") { TargetOs::MacOs }
+    else if t.contains("windows") || t.contains("msvc") { TargetOs::Windows }
+    else { TargetOs::Unknown }
+}
+
+/// 当前宿主 OS（编译期已知）
+pub fn host_os() -> TargetOs {
+    match std::env::consts::OS {
+        "macos" => TargetOs::MacOs,
+        "linux" => TargetOs::Linux,
+        "windows" => TargetOs::Windows,
+        _ => TargetOs::Unknown,
+    }
+}
+
+/// 判断 target triple 是否需要交叉链接（宿主 OS ≠ 目标 OS）
+pub fn is_cross_os(target_triple: &str) -> bool {
+    host_os() != target_os_from_triple(target_triple)
+}
+
+/// lld 的 -m 参数值，根据 target triple 和目标格式推断
+pub fn lld_machine(target_triple: &str, target_os: TargetOs) -> &'static str {
+    match target_os {
+        TargetOs::Linux => {
+            if target_triple.contains("x86_64") { "elf_x86_64" }
+            else if target_triple.contains("aarch64") { "aarch64linux" }
+            else if target_triple.contains("arm") { "armelf_linux_eabi" }
+            else { "elf_x86_64" }
+        }
+        TargetOs::MacOs => {
+            if target_triple.contains("aarch64") || target_triple.contains("arm64") { "arm64" }
+            else if target_triple.contains("x86_64") { "x86_64" }
+            else { "arm64" }
+        }
+        _ => "elf_x86_64",
+    }
+}
+
+/// 查找目标平台的 sysroot / 运行时库
+///
+/// - Linux musl: 返回 self-contained 目录（含 musl libc.a、crt*.o）
+/// - macOS: 返回 Apple SDK 路径或 None（宿主 macOS 时系统 cc 自带 SDK）
+pub fn find_target_sysroot(target_triple: &str) -> Option<PathBuf> {
+    let target_os = target_os_from_triple(target_triple);
+    let rustup_home = std::env::var("RUSTUP_HOME").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        format!("{}/.rustup", home)
+    });
+    let rustup = PathBuf::from(&rustup_home);
+
+    match target_os {
+        TargetOs::Linux => {
+            // musl: 查找 self-contained/libc.a
+            let toolchains = rustup.join("toolchains");
+            for entry in std::fs::read_dir(&toolchains).ok()? {
+                let entry = entry.ok()?;
+                let lib_dir = entry.path().join("lib").join("rustlib").join(target_triple).join("lib").join("self-contained");
+                if lib_dir.join("libc.a").is_file() {
+                    return Some(lib_dir);
+                }
+            }
+            None
+        }
+        TargetOs::MacOs => {
+            // macOS SDK: SDKROOT 环境变量 → xcrun → 常见路径
+            if let Ok(sdk) = std::env::var("SDKROOT") {
+                let p = PathBuf::from(&sdk);
+                if p.is_dir() { return Some(p); }
+            }
+            // 尝试 xcrun（仅 macOS）
+            if let Ok(output) = std::process::Command::new("xcrun")
+                .args(["--show-sdk-path", "-sdk", "macosx"])
+                .output()
+            {
+                if output.status.success() {
+                    let p = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+                    if p.is_dir() { return Some(p); }
+                }
+            }
+            // 常见 SDK 路径
+            for sdk in &[
+                "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+                "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+            ] {
+                let p = PathBuf::from(sdk);
+                if p.is_dir() { return Some(p); }
+            }
+            // 宿主 macOS 使用系统 cc 时不需要 SDK 路径（cc 内部已知）
+            // 仅交叉编译（Linux → macOS）时需提示设置 SDKROOT
+            None
+        }
+        _ => None,
+    }
+}

@@ -1,0 +1,6 @@
+// demo.kang — 本地编译示例
+def main() -> i32 {
+    puts("Kang 本地编译成功!");
+    print("当前平台可执行文件已生成。\n");
+    return 0;
+}

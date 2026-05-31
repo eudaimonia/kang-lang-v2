@@ -4,7 +4,7 @@
 
 use kangc::error::emit_diagnostic;
 use kangc::stats::CompilerStats;
-use kangc::{compile_to_stage, PipelineStage};
+use kangc::{compile_to_stage, host_os, lld_machine, target_os_from_triple, PipelineStage, TargetOs};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -443,15 +443,31 @@ fn resolve_cargo() -> String {
     }
 }
 
-/// 使用系统 cc 链接 .o 文件 + libkangrt.a → 可执行文件
+/// 链接 .o + libkangrt.a → 可执行文件。根据宿主/目标平台自动选择链接器。
 ///
-/// 当 target_triple 设置时，追加 `-target <triple>` 以支持交叉编译（需要 clang）。
-///
-/// CC 环境变量的值必须指向可信目录中的链接器，防止任意代码执行。
+/// - 同 OS 同架构: 系统 cc
+/// - 同 OS 不同架构: 系统 cc + -target (如 macOS arm64 → macOS x86_64)
+/// - 跨 OS: lld (如 macOS → Linux musl, Linux → macOS)
 fn link_executable(obj_path: &Path, kangrt_path: &Path, out_path: &Path, target_triple: Option<&str>) {
+    let triple = target_triple.unwrap_or("");
+    let target_os = target_os_from_triple(triple);
+    let needs_cross = !triple.is_empty() && kangc::is_cross_os(triple);
+
+    if needs_cross {
+        cross_link(&[obj_path.to_path_buf()], kangrt_path, out_path, triple, target_os);
+    } else {
+        native_link(&[obj_path.to_path_buf()], kangrt_path, out_path, target_triple);
+    }
+}
+
+/// 同 OS 链接（使用系统 cc，支持同 OS 内跨架构如 arm64→x86_64）
+fn native_link(obj_files: &[PathBuf], kangrt_path: &Path, out_path: &Path, target_triple: Option<&str>) {
     let linker = validate_linker();
     let mut cmd = process::Command::new(&linker);
-    cmd.arg(obj_path).arg(kangrt_path).arg("-o").arg(out_path);
+    for obj in obj_files {
+        cmd.arg(obj);
+    }
+    cmd.arg(kangrt_path).arg("-o").arg(out_path);
     if let Some(t) = target_triple {
         cmd.arg("-target").arg(t);
     }
@@ -459,11 +475,109 @@ fn link_executable(obj_path: &Path, kangrt_path: &Path, out_path: &Path, target_
         eprintln!("无法启动链接器 {}: {}", linker, e);
         process::exit(1);
     });
-
     if !status.success() {
         eprintln!("链接失败");
         process::exit(1);
     }
+}
+
+/// 跨 OS 链接: 根据目标平台选择 ELF (Linux) 或 Mach-O (macOS) 路径
+fn cross_link(obj_files: &[PathBuf], kangrt_path: &Path, out_path: &Path, target_triple: &str, target_os: TargetOs) {
+    match target_os {
+        TargetOs::Linux => cross_link_linux(obj_files, kangrt_path, out_path, target_triple),
+        TargetOs::MacOs => cross_link_macos(obj_files, kangrt_path, out_path, target_triple),
+        _ => {
+            eprintln!("交叉链接不支持的目标 OS: {:?} (triple: {})", target_os, target_triple);
+            process::exit(1);
+        }
+    }
+}
+
+/// 交叉链接 → Linux ELF 静态可执行文件 (musl)
+fn cross_link_linux(obj_files: &[PathBuf], kangrt_path: &Path, out_path: &Path, target_triple: &str) {
+    let lld = kangc::find_cross_linker().unwrap_or_else(|msg| {
+        eprintln!("交叉链接失败: {}", msg);
+        process::exit(1);
+    });
+
+    let sysroot = kangc::find_target_sysroot(target_triple).unwrap_or_else(|| {
+        eprintln!("交叉链接失败: 找不到 {} 的 musl libc，请通过 rustup target add {} 安装",
+                  target_triple, target_triple);
+        process::exit(1);
+    });
+
+    let machine = lld_machine(target_triple, TargetOs::Linux);
+
+    let mut cmd = process::Command::new(&lld);
+    cmd.arg(sysroot.join("crt1.o"));
+    cmd.arg(sysroot.join("crti.o"));
+    cmd.arg(sysroot.join("crtbegin.o"));
+    for obj in obj_files { cmd.arg(obj); }
+    cmd.arg(kangrt_path);
+    cmd.arg(sysroot.join("libc.a"));
+    cmd.arg(sysroot.join("libc.a"));
+    cmd.arg(sysroot.join("crtend.o"));
+    cmd.arg(sysroot.join("crtn.o"));
+    cmd.arg("-o").arg(out_path);
+    cmd.arg("-m").arg(machine);
+    cmd.arg("--hash-style=gnu");
+    cmd.arg("--eh-frame-hdr");
+    cmd.arg("-static");
+
+    let status = cmd.status().unwrap_or_else(|e| {
+        eprintln!("无法启动 lld: {}", e);
+        process::exit(1);
+    });
+    if !status.success() {
+        eprintln!("交叉链接失败 (target: {})", target_triple);
+        process::exit(1);
+    }
+}
+
+/// 交叉链接 → macOS Mach-O 可执行文件
+///
+/// 使用 lld 的 Mach-O 模式。若当前在 macOS 宿主，优先使用系统 cc
+/// （不会走到此路径）；此路径用于 Linux→macOS 等场景。
+fn cross_link_macos(obj_files: &[PathBuf], kangrt_path: &Path, out_path: &Path, target_triple: &str) {
+    let lld = kangc::find_cross_linker().unwrap_or_else(|msg| {
+        eprintln!("交叉链接失败: {}", msg);
+        process::exit(1);
+    });
+
+    let machine = lld_machine(target_triple, TargetOs::MacOs);
+    let min_ver = macos_deployment_target();
+
+    let mut cmd = process::Command::new(&lld);
+    for obj in obj_files { cmd.arg(obj); }
+    cmd.arg(kangrt_path);
+    cmd.arg("-o").arg(out_path);
+    cmd.arg("-m").arg(machine);
+    cmd.arg("-platform_version").arg("macos").arg(&min_ver).arg(&min_ver);
+    cmd.arg("-lSystem");
+    // 若设置了 SDKROOT，传递 -syslibroot
+    if let Some(sdk) = kangc::find_target_sysroot(target_triple) {
+        cmd.arg("-syslibroot").arg(sdk);
+    }
+    // 若宿主机不是 macOS，提示需要 SDK
+    if host_os() != TargetOs::MacOs && kangc::find_target_sysroot(target_triple).is_none() {
+        eprintln!("警告: 未设置 SDKROOT。从 Linux 交叉编译到 macOS 需要 Apple macOS SDK。");
+        eprintln!("请设置 SDKROOT=/path/to/MacOSX.sdk 或通过 osxcross 获取 SDK。");
+        eprintln!("详见: https://github.com/tpoechtrager/osxcross");
+    }
+
+    let status = cmd.status().unwrap_or_else(|e| {
+        eprintln!("无法启动 lld: {}", e);
+        process::exit(1);
+    });
+    if !status.success() {
+        eprintln!("交叉链接失败 (target: {})", target_triple);
+        process::exit(1);
+    }
+}
+
+/// 获取 macOS 最低部署目标版本，默认 11.0
+fn macos_deployment_target() -> String {
+    std::env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "11.0".into())
 }
 
 // ── 多文件编译 (M7) ────────────────────────────────────────────────────────────
@@ -559,26 +673,16 @@ fn compile_all_units(
     obj_files
 }
 
-/// 链接多个 .o 文件 + libkangrt.a → 可执行文件
+/// 链接多个 .o 文件 + libkangrt.a → 可执行文件。自动检测交叉编译。
 fn link_multi(obj_files: &[PathBuf], kangrt_path: &Path, out_path: &Path, target_triple: Option<&str>) {
-    let linker = validate_linker();
-    let mut cmd = process::Command::new(&linker);
-    for obj in obj_files {
-        cmd.arg(obj);
-    }
-    cmd.arg(kangrt_path).arg("-o").arg(out_path);
-    if let Some(t) = target_triple {
-        cmd.arg("-target").arg(t);
-    }
+    let triple = target_triple.unwrap_or("");
+    let target_os = target_os_from_triple(triple);
+    let needs_cross = !triple.is_empty() && kangc::is_cross_os(triple);
 
-    let status = cmd.status().unwrap_or_else(|e| {
-        eprintln!("无法启动链接器 {}: {}", linker, e);
-        process::exit(1);
-    });
-
-    if !status.success() {
-        eprintln!("链接失败");
-        process::exit(1);
+    if needs_cross {
+        cross_link(obj_files, kangrt_path, out_path, triple, target_os);
+    } else {
+        native_link(obj_files, kangrt_path, out_path, target_triple);
     }
 }
 
