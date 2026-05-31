@@ -2,7 +2,9 @@
 // 所有分配在程序结束时统一回收，无 free 操作
 
 use crate::panic::k_panic_impl;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
+#[cfg(not(test))]
+use core::sync::atomic::Ordering;
 
 const CHUNK_SIZE: usize = 64 * 1024; // 每个 chunk 64KB
 
@@ -25,7 +27,32 @@ static mut REMAINING: usize = 0;
 
 /// Arena 重入/并发检测守卫：alloc 和 reset 操作不可重入（包括信号/多线程），
 /// 否则说明设计约束被打破。用 AtomicBool 零同步开销检测异常访问。
+/// test 模式下禁用检测：Rust 测试框架多线程运行测试会误触发，且全局 mutable statics
+/// 在并行测试中本身不安全。需 `--test-threads=1` 运行 kangrt 测试。
+#[cfg_attr(test, allow(dead_code))]
 static ARENA_IN_USE: AtomicBool = AtomicBool::new(false);
+
+/// 进入 arena 操作；检测到重入/并发时调用 k_panic 终止
+fn arena_enter() {
+    #[cfg(not(test))]
+    if ARENA_IN_USE.swap(true, Ordering::Acquire) {
+        k_panic_impl(b"arena: concurrent alloc detected\0".as_ptr(), 29);
+    }
+}
+
+/// 离开 arena 操作；释放重入守卫
+fn arena_leave() {
+    #[cfg(not(test))]
+    ARENA_IN_USE.store(false, Ordering::Release);
+}
+
+/// 进入 reset 操作；检测语义与 arena_enter 相同
+fn arena_enter_reset() {
+    #[cfg(not(test))]
+    if ARENA_IN_USE.swap(true, Ordering::Acquire) {
+        k_panic_impl(b"arena: concurrent reset detected\0".as_ptr(), 29);
+    }
+}
 
 unsafe extern "C" {
     fn malloc(size: usize) -> *mut u8;
@@ -59,13 +86,10 @@ unsafe fn new_chunk(size: usize) -> *mut Chunk {
 /// # Safety
 /// `align` 必须是 2 的幂，否则调用 k_panic 终止程序
 unsafe fn alloc(size: usize, align: usize) -> *mut u8 {
-    // 检测并发/重入调用，违反单线程设计约束时终止
-    if ARENA_IN_USE.swap(true, Ordering::Acquire) {
-        k_panic_impl(b"arena: concurrent alloc detected\0".as_ptr(), 29);
-    }
+    arena_enter();
 
     if !align.is_power_of_two() {
-        ARENA_IN_USE.store(false, Ordering::Release);
+        arena_leave();
         k_panic_impl(b"arena alloc: align \x00".as_ptr(), 16);
     }
 
@@ -83,7 +107,7 @@ unsafe fn alloc(size: usize, align: usize) -> *mut u8 {
             // 零初始化
             core::ptr::write_bytes(ptr, 0, size);
         }
-        ARENA_IN_USE.store(false, Ordering::Release);
+        arena_leave();
         return ptr;
     }
 
@@ -97,6 +121,7 @@ unsafe fn alloc(size: usize, align: usize) -> *mut u8 {
     };
 
     if unsafe { new_chunk(chunk_size).is_null() } {
+        arena_leave();
         k_panic_impl("out of memory\0".as_ptr(), 13);
     }
 
@@ -109,7 +134,7 @@ unsafe fn alloc(size: usize, align: usize) -> *mut u8 {
         REMAINING -= offset.checked_add(size).unwrap_or(usize::MAX);
         core::ptr::write_bytes(ptr, 0, size);
     }
-    ARENA_IN_USE.store(false, Ordering::Release);
+    arena_leave();
     ptr
 }
 
@@ -133,9 +158,7 @@ pub unsafe extern "C" fn k_arena_alloc_aligned(size: usize, align: usize) -> *mu
 /// 重置 arena，释放所有已分配内存
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn k_arena_reset() {
-    if ARENA_IN_USE.swap(true, Ordering::Acquire) {
-        k_panic_impl(b"arena: concurrent reset detected\0".as_ptr(), 29);
-    }
+    arena_enter_reset();
     let mut chunk = unsafe { HEAD };
     while !chunk.is_null() {
         unsafe {
@@ -150,6 +173,7 @@ pub unsafe extern "C" fn k_arena_reset() {
         BUMP = core::ptr::null_mut();
         REMAINING = 0;
     }
+    arena_leave();
 }
 
 // ── 测试 ────────────────────────────────────────────────────────────────────────

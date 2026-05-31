@@ -1,6 +1,8 @@
 // 内置函数实现 — 19 个 C ABI 函数，封装 libc 实现 Kang 语言内置功能
 // 所有字符串/数组操作通过 arena 分配内存
 
+use core::fmt::Write;
+
 use crate::arena::k_arena_alloc;
 use crate::types::*;
 
@@ -49,13 +51,14 @@ unsafe extern "C" {
     fn strlen(s: *const u8) -> usize;
     fn strcmp(s1: *const u8, s2: *const u8) -> i32;
 
+    // file operations
+    fn remove(path: *const u8) -> i32;
+
     // stdlib
     fn strtol(nptr: *const u8, endptr: *mut *mut u8, base: i32) -> CLong;
     fn strtod(nptr: *const u8, endptr: *mut *mut u8) -> f64;
     fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8;
 
-    // unistd
-    fn access(path: *const u8, mode: i32) -> i32;
 }
 
 /// 平台无关的 stdin/stdout/stderr 访问（macOS 与 Linux 符号名不同）
@@ -80,7 +83,6 @@ fn stderr_ptr() -> *mut FILE {
     unsafe { stderr }
 }
 
-const F_OK: i32 = 0;
 const SEEK_SET: i32 = 0;
 const SEEK_END: i32 = 2;
 
@@ -143,82 +145,44 @@ fn format_i32(n: i32) -> (usize, [u8; 12]) {
     (len, out)
 }
 
-/// f64 绝对值（no_std 兼容，用位操作避免 libm）
-fn f64_abs(n: f64) -> f64 {
-    f64::from_bits(n.to_bits() & 0x7fffffffffffffff)
-}
-
-/// f64 截断到整数部分（向零方向，no_std 兼容）
-fn f64_trunc(n: f64) -> f64 {
-    (n as i64) as f64
-}
-
-/// 将 f64 格式化为字符串到栈缓冲区，返回 (ptr, len)
-/// 使用定点格式 + 最多 6 位小数，替代 variadic snprintf FFI
+/// 将 f64 格式化为字符串到栈缓冲区，返回 (len, buf)
+/// 使用 core::fmt::Write 处理所有 f64 值，正确格式化极大/极小值
 fn format_f64(n: f64) -> (usize, [u8; 64]) {
-    let mut buf = [0u8; 64];
+    struct BufWriter {
+        buf: [u8; 64],
+        pos: usize,
+    }
+    impl core::fmt::Write for BufWriter {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            let bytes = s.as_bytes();
+            let end = self.pos + bytes.len();
+            if end > self.buf.len() {
+                return Err(core::fmt::Error);
+            }
+            self.buf[self.pos..end].copy_from_slice(bytes);
+            self.pos = end;
+            Ok(())
+        }
+    }
 
-    // 特殊值
+    let mut writer = BufWriter { buf: [0u8; 64], pos: 0 };
+
     if n.is_nan() {
-        buf[..3].copy_from_slice(b"nan");
-        return (3, buf);
+        writer.buf[..3].copy_from_slice(b"nan");
+        return (3, writer.buf);
     }
     if n.is_infinite() {
         if n.is_sign_negative() {
-            buf[..4].copy_from_slice(b"-inf");
-            return (4, buf);
+            writer.buf[..4].copy_from_slice(b"-inf");
+            return (4, writer.buf);
         }
-        buf[..3].copy_from_slice(b"inf");
-        return (3, buf);
+        writer.buf[..3].copy_from_slice(b"inf");
+        return (3, writer.buf);
     }
 
-    let neg = n.is_sign_negative();
-    let abs = f64_abs(n);
-
-    if abs == 0.0 {
-        buf[0] = b'0';
-        return (1, buf);
-    }
-
-    // 对于极大/极小值，用 as i64 cast 会溢出；此类值按 0 处理（防御性）
-    if abs >= i64::MAX as f64 {
-        buf[..3].copy_from_slice(b"inf");
-        return (3, buf);
-    }
-
-    let mut pos = 0;
-    if neg { buf[pos] = b'-'; pos += 1; }
-
-    // 缩放以获得最多 6 位小数精度
-    let scaled = f64_trunc(abs * 1_000_000.0) as u64;
-    let int_part = scaled / 1_000_000;
-    let frac_part = scaled % 1_000_000;
-
-    // 整数部分
-    let mut tmp = [0u8; 20];
-    let mut tp = 20;
-    let mut ip = int_part;
-    if ip == 0 { tp -= 1; tmp[tp] = b'0'; }
-    while ip > 0 { tp -= 1; tmp[tp] = b'0' + (ip % 10) as u8; ip /= 10; }
-    let ip_len = 20 - tp;
-    buf[pos..pos+ip_len].copy_from_slice(&tmp[tp..]);
-    pos += ip_len;
-
-    // 小数部分（去掉尾部零）
-    if frac_part > 0 {
-        buf[pos] = b'.'; pos += 1;
-        let mut fp = frac_part;
-        let mut fd = [0u8; 6];
-        let mut fpos = 6;
-        while fpos > 0 { fpos -= 1; fd[fpos] = b'0' + (fp % 10) as u8; fp /= 10; }
-        // 找到最后非零位
-        let mut end = 6;
-        while end > 0 && fd[end-1] == b'0' { end -= 1; }
-        buf[pos..pos+end].copy_from_slice(&fd[..end]);
-        pos += end;
-    }
-
-    (pos, buf)
+    // 使用 Rust 标准格式化，最多 6 位小数，正确处理所有有限 f64 值
+    let _ = core::write!(writer, "{:.6}", n);
+    (writer.pos, writer.buf)
 }
 
 // ── 数组操作 ────────────────────────────────────────────────────────────────────
@@ -326,16 +290,27 @@ pub unsafe extern "C" fn k_read_file(path: *const u8, path_len: i32) -> KStrBool
     }
 }
 
-/// read_line() -> (str, bool) — 从 stdin 读取一行
+/// read_line() -> (str, bool) — 从 stdin 读取一行，超长行截断并丢弃剩余部分
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn k_read_line() -> KStrBool {
+    // 64 KB 栈缓冲区，足以容纳任何合理的单行输入
+    const BUF_SIZE: i32 = 65536;
     unsafe {
-        let mut buf = [0u8; 4096];
-        let result = fgets(buf.as_mut_ptr(), 4096, stdin_ptr());
+        let mut buf = [0u8; BUF_SIZE as usize];
+        let result = fgets(buf.as_mut_ptr(), BUF_SIZE, stdin_ptr());
         if result.is_null() {
             return KStrBool { ptr: core::ptr::null(), len: 0, ok: 0 };
         }
         let mut len = strlen(buf.as_ptr()) as i32;
+        // 若未读到换行符，说明行太长被截断，丢弃 stdin 剩余部分直到换行
+        if len > 0 && buf[len as usize - 1] != b'\n' {
+            loop {
+                let mut discard = 0u8;
+                if fread(&mut discard as *mut u8, 1, 1, stdin_ptr()) == 0 || discard == b'\n' {
+                    break;
+                }
+            }
+        }
         strip_newline(buf.as_mut_ptr(), &mut len);
         let out = k_arena_alloc(len as usize + 1);
         memcpy(out, buf.as_ptr(), len as usize);
@@ -359,8 +334,13 @@ pub unsafe extern "C" fn k_write_file(
         if file.is_null() {
             return;
         }
-        let _ = fputs(content_c, file);
-        let _ = fclose(file);
+        // fputs 返回非负表示成功，EOF 表示错误
+        let put_ok = fputs(content_c, file) >= 0;
+        let close_ok = fclose(file) == 0;
+        if !put_ok || !close_ok {
+            // 写入或关闭失败时，尝试删除可能已损坏的文件
+            let _ = remove(path_c);
+        }
     }
 }
 
@@ -379,17 +359,25 @@ pub unsafe extern "C" fn k_append_file(
         if file.is_null() {
             return;
         }
-        let _ = fputs(content_c, file);
-        let _ = fclose(file);
+        let put_ok = fputs(content_c, file) >= 0;
+        let close_ok = fclose(file) == 0;
+        if !put_ok || !close_ok {
+            let _ = remove(path_c);
+        }
     }
 }
 
-/// file_exists(path: str) -> bool — 使用 access(F_OK)
+/// file_exists(path: str) -> bool — 使用 fopen 检查，目录返回 false
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn k_file_exists(path: *const u8, path_len: i32) -> i32 {
     unsafe {
         let path_c = to_c_str(path, path_len);
-        (access(path_c, F_OK) == 0) as i32
+        let file = fopen(path_c, b"r\0".as_ptr());
+        if file.is_null() {
+            return 0;
+        }
+        fclose(file);
+        1
     }
 }
 

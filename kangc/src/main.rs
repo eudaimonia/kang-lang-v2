@@ -167,7 +167,7 @@ fn cmd_build(args: &[String]) {
     if all_files.len() == 1 && !emit_obj_only {
         // 单文件: 使用原有简单流程
         let obj_path = cargs.file_path.with_extension("o");
-        let source = read_file(&cargs.file_path);
+        let source = read_source(&cargs.file_path);
 
         match compile_to_stage(
             &source,
@@ -231,7 +231,7 @@ fn cmd_run(args: &[String]) {
 
     if all_files.len() == 1 {
         // 单文件: 原有简单流程
-        let source = read_file(&cargs.file_path);
+        let source = read_source(&cargs.file_path);
         match compile_to_stage(
             &source,
             &cargs.file_path.to_string_lossy(),
@@ -308,7 +308,7 @@ fn run_exe(exe_path: &Path) {
 
 /// 执行编译管线到指定阶段，处理输出和统计
 fn run_to_stage(cargs: CompileArgs, stage: PipelineStage, check_mode: bool) {
-    let source = read_file(&cargs.file_path);
+    let source = read_source(&cargs.file_path);
 
     let object_path = if stage >= PipelineStage::Object {
         cargs.out_path.as_deref()
@@ -375,18 +375,12 @@ fn print_stats(stats: &CompilerStats, stage: PipelineStage) {
 
 /// 查找 workspace 根目录（kangc/Cargo.toml 的父目录）
 ///
-/// 使用 cargo 编译期环境变量定位。若二进制被移出 cargo target 目录独立发布，
-/// 此路径可能失效——届时需通过 KANG_HOME 环境变量或可执行文件旁路查找运行时库。
-fn find_project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("找不到 workspace 根目录")
-        .to_path_buf()
-}
+/// 优先使用 KANG_HOME 环境变量，其次使用 CARGO_MANIFEST_DIR 编译期路径。
+/// 若二进制被移出 cargo target 目录独立发布，设置 KANG_HOME 即可。
 
 /// 查找或构建 libkangrt.a，返回 .a 文件路径
 fn find_or_build_kangrt(target_triple: Option<&str>) -> PathBuf {
-    let project_root = find_project_root();
+    let project_root = kangc::find_project_root();
 
     let lib_dir = match target_triple {
         Some(t) => project_root.join("target").join(t).join("release"),
@@ -535,7 +529,7 @@ fn compile_all_units(
 
     for file in files {
         let obj_path = file.with_extension("o");
-        let source = read_file(file);
+        let source = read_source(file);
 
         match compile_to_stage(
             &source,
@@ -590,9 +584,13 @@ fn link_multi(obj_files: &[PathBuf], kangrt_path: &Path, out_path: &Path, target
 
 // ── 公共辅助 ────────────────────────────────────────────────────────────────
 
-fn read_file(path: &PathBuf) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|e| {
-        eprintln!("读取文件失败 {}: {}", path.display(), e);
+fn read_file(path: &PathBuf) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| format!("读取文件失败 {}: {}", path.display(), e))
+}
+
+fn read_source(path: &PathBuf) -> String {
+    read_file(path).unwrap_or_else(|msg| {
+        eprintln!("{}", msg);
         process::exit(1);
     })
 }

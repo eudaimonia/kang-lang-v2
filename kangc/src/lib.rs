@@ -185,6 +185,26 @@ pub fn compile_full(
     Ok((typed, result, source_stats, lex_stats, parse_stats, sem_stats, cg_stats))
 }
 
+// ── 工程工具 ────────────────────────────────────────────────────────────────
+
+/// 查找 workspace 根目录（kangc/Cargo.toml 的父目录）
+///
+/// 优先使用 KANG_HOME 环境变量，其次使用 CARGO_MANIFEST_DIR 编译期路径。
+/// 供 CLI 和 REPL 共用，保持 kangrt 运行时库查找策略一致。
+pub fn find_project_root() -> PathBuf {
+    if let Ok(home) = std::env::var("KANG_HOME") {
+        let p = PathBuf::from(&home);
+        if p.is_dir() {
+            return p;
+        }
+        eprintln!("警告: KANG_HOME 指向的路径不存在: {}", home);
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("找不到 workspace 根目录，请设置 KANG_HOME 环境变量")
+        .to_path_buf()
+}
+
 // ── 链接器工具 ────────────────────────────────────────────────────────────────
 
 /// 可信链接器目录白名单

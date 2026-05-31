@@ -532,10 +532,7 @@ fn unary_op_str(op: &ast::UnaryOp) -> &'static str {
 // ── 链接 ──────────────────────────────────────────────────────────────────────
 
 fn find_or_build_kangrt() -> Result<PathBuf, String> {
-    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("找不到 workspace 根目录")
-        .to_path_buf();
+    let project_root = crate::find_project_root();
 
     let lib_dir = project_root.join("target").join("release");
     let lib_path = lib_dir.join("libkangrt.a");

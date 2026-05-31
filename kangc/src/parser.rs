@@ -10,11 +10,29 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::time::Instant;
 
-// 最大 token 数，防止恶意超大输入耗尽内存；1M tokens ≈ 50MB 源码，教学语言足够
-const MAX_TOKEN_COUNT: usize = 1_000_000;
+// 限制 token 数防超大输入耗尽内存；1M tokens ≈ 50MB 源码。可通过 KANG_MAX_TOKENS 环境变量覆盖
+fn max_token_count() -> usize {
+    use std::sync::LazyLock;
+    static LIMIT: LazyLock<usize> = LazyLock::new(|| read_env_limit("KANG_MAX_TOKENS", 1_000_000));
+    *LIMIT
+}
 
-// 最大嵌套深度，防止恶意输入导致栈溢出
-const MAX_PARSE_DEPTH: usize = 256;
+// 限制嵌套深度防栈溢出。可通过 KANG_MAX_DEPTH 环境变量覆盖
+fn max_parse_depth() -> usize {
+    use std::sync::LazyLock;
+    static LIMIT: LazyLock<usize> = LazyLock::new(|| read_env_limit("KANG_MAX_DEPTH", 256));
+    *LIMIT
+}
+
+/// 从环境变量读取解析限制值，或使用默认值
+fn read_env_limit(env_name: &str, default: usize) -> usize {
+    if let Ok(val) = std::env::var(env_name) {
+        if let Ok(n) = val.parse::<usize>() {
+            if n > 0 { return n; }
+        }
+    }
+    default
+}
 
 // ── Parser 结构 ─────────────────────────────────────────────────────────────
 
@@ -41,10 +59,10 @@ impl<'a> Parser<'a> {
     /// 进入递归层级，超限则报错
     fn enter_depth(&mut self, ctx: &str) -> Result<(), ParseError> {
         self.depth += 1;
-        if self.depth > MAX_PARSE_DEPTH {
+        if self.depth > max_parse_depth() {
             return Err(self.error(format!(
                 "{} 嵌套深度超过限制 {}",
-                ctx, MAX_PARSE_DEPTH
+                ctx, max_parse_depth()
             )));
         }
         Ok(())
@@ -883,9 +901,9 @@ fn count_expr_nodes(e: &Expr, counts: &mut HashMap<String, usize>) {
 
 /// 将 token 流解析为 AST，同时收集统计数据
 pub fn parse(tokens: &[Token], stats: &mut ParseStats) -> Result<Program, ParseError> {
-    if tokens.len() > MAX_TOKEN_COUNT {
+    if tokens.len() > max_token_count() {
         return Err(ParseError {
-            msg: format!("token 数量 {} 超过限制 {}", tokens.len(), MAX_TOKEN_COUNT),
+            msg: format!("token 数量 {} 超过限制 {}", tokens.len(), max_token_count()),
             line: 0,
             col: 0,
             span: 0..0,
@@ -946,9 +964,9 @@ pub fn parse_expr(tokens: &[Token]) -> Result<Expr, ParseError> {
 /// - 表达式后跟 ; → 表达式语句
 /// - 表达式后跟 EOF → 裸表达式（REPL 求值并打印）
 pub fn parse_line(tokens: &[Token]) -> Result<LineResult, ParseError> {
-    if tokens.len() > MAX_TOKEN_COUNT {
+    if tokens.len() > max_token_count() {
         return Err(ParseError {
-            msg: format!("token 数量 {} 超过限制 {}", tokens.len(), MAX_TOKEN_COUNT),
+            msg: format!("token 数量 {} 超过限制 {}", tokens.len(), max_token_count()),
             line: 0,
             col: 0,
             span: 0..0,
