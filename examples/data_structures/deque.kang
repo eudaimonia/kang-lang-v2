@@ -1,0 +1,98 @@
+// deque.kang — double-ended queue, array-backed
+
+// push to front (decrement head, wrap)
+def push_front_h(data:[i32], head:i32, count:i32, val:i32) -> i32 {
+    var cap:i32 = len(data);
+    var h:i32 = head - 1;
+    if h < 0 then { h = cap - 1; }
+    data[h] = val;
+    return h;
+}
+
+// push to back (tail position)
+def push_back_t(data:[i32], tail:i32, val:i32) -> i32 {
+    var cap:i32 = len(data);
+    data[tail] = val;
+    var t:i32 = tail + 1;
+    if t == cap then { t = 0; }
+    return t;
+}
+
+// pop from front
+def pop_front_val(data:[i32], head:i32) -> i32 {
+    return data[head];
+}
+
+def pop_front_h(data:[i32], head:i32) -> i32 {
+    var cap:i32 = len(data);
+    var h:i32 = head + 1;
+    if h == cap then { h = 0; }
+    return h;
+}
+
+// pop from back
+def pop_back_t(data:[i32], tail:i32) -> i32 {
+    var cap:i32 = len(data);
+    var t:i32 = tail - 1;
+    if t < 0 then { t = cap - 1; }
+    return t;
+}
+
+def pop_back_val(data:[i32], tail:i32) -> i32 {
+    var cap:i32 = len(data);
+    var t:i32 = tail - 1;
+    if t < 0 then { t = cap - 1; }
+    return data[t];
+}
+
+def main() -> i32 {
+    var data:[i32] = [0, 0, 0, 0, 0, 0];
+    var head:i32 = 0;
+    var tail:i32 = 0;
+    var count:i32 = 0;
+
+    // push_back 30, push_front 20, push_back 40, push_front 10, push_back 50, push_front 5
+    tail = push_back_t(data, tail, 30); count = count + 1;
+    head = push_front_h(data, head, count, 20); count = count + 1;
+    tail = push_back_t(data, tail, 40); count = count + 1;
+    head = push_front_h(data, head, count, 10); count = count + 1;
+    tail = push_back_t(data, tail, 50); count = count + 1;
+    head = push_front_h(data, head, count, 5); count = count + 1;
+
+    if count != 6 then { puts("count: FAIL"); return 1; }
+
+    // pop_front 5
+    var f1:i32 = pop_front_val(data, head);
+    head = pop_front_h(data, head); count = count - 1;
+    if f1 != 5 then { puts("f1: FAIL"); return 1; }
+
+    // pop_back 50
+    var b1:i32 = pop_back_val(data, tail);
+    tail = pop_back_t(data, tail); count = count - 1;
+    if b1 != 50 then { puts("b1: FAIL"); return 1; }
+
+    // pop_front 10
+    var f2:i32 = pop_front_val(data, head);
+    head = pop_front_h(data, head); count = count - 1;
+    if f2 != 10 then { puts("f2: FAIL"); return 1; }
+
+    // pop_back 40
+    var b2:i32 = pop_back_val(data, tail);
+    tail = pop_back_t(data, tail); count = count - 1;
+    if b2 != 40 then { puts("b2: FAIL"); return 1; }
+
+    // remaining: pop_front 20, 30
+    var f3:i32 = pop_front_val(data, head);
+    head = pop_front_h(data, head); count = count - 1;
+    var f4:i32 = pop_front_val(data, head);
+    head = pop_front_h(data, head); count = count - 1;
+    if f3 != 20 then { puts("f3: FAIL"); return 1; }
+    if f4 != 30 then { puts("f4: FAIL"); return 1; }
+
+    var out1:str = "pop_front: " + str(f1) + " " + str(f2) + " " + str(f3) + " " + str(f4);
+    var out2:str = "pop_back:  " + str(b1) + " " + str(b2);
+    puts(out1);
+    puts(out2);
+    puts("deque: OK");
+    return 0;
+}

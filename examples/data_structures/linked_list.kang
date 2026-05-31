@@ -1,0 +1,113 @@
+// linked_list.kang — singly linked list using array-index "pointers"
+// pool layout: values[i], nexts[i] form node i, -1 means null
+
+// find tail index starting from head, returns -1 if list empty
+def find_tail(nexts:[i32], head:i32) -> i32 {
+    if head < 0 then { return -1; }
+    var cur:i32 = head;
+    var n:i32 = len(nexts);
+    var done:bool = false;
+    for var i:i32 = 0, i < n, i = i + 1 in {
+        if done then { i = n; }
+        if nexts[cur] < 0 then { done = true; }
+        else { cur = nexts[cur]; }
+    }
+    return cur;
+}
+
+// find value, return index or -1
+def ll_find(vals:[i32], nexts:[i32], head:i32, val:i32) -> i32 {
+    var cur:i32 = head;
+    var n:i32 = len(vals);
+    var done:bool = false;
+    for var i:i32 = 0, i < n, i = i + 1 in {
+        if done then { i = n; }
+        if cur < 0 then { done = true; }
+        if !done then {
+            if vals[cur] == val then {
+                return cur;
+            }
+            cur = nexts[cur];
+        }
+    }
+    return -1;
+}
+
+// collect all values into a new array
+def ll_to_array(vals:[i32], nexts:[i32], head:i32) -> [i32] {
+    var result:[i32] = [];
+    var cur:i32 = head;
+    var n:i32 = len(vals);
+    var done:bool = false;
+    for var i:i32 = 0, i < n, i = i + 1 in {
+        if done then { i = n; }
+        if cur < 0 then { done = true; }
+        else {
+            push(result, vals[cur]);
+            cur = nexts[cur];
+        }
+    }
+    return result;
+}
+
+// list length
+def ll_length(nexts:[i32], head:i32) -> i32 {
+    var count:i32 = 0;
+    var cur:i32 = head;
+    var n:i32 = len(nexts);
+    var done:bool = false;
+    for var i:i32 = 0, i < n, i = i + 1 in {
+        if done then { i = n; }
+        if cur < 0 then { done = true; }
+        else {
+            count = count + 1;
+            cur = nexts[cur];
+        }
+    }
+    return count;
+}
+
+def main() -> i32 {
+    var vals:[i32] = [];
+    var nexts:[i32] = [];
+    var head:i32 = -1;
+
+    // prepend 10, 20, 30 — push operations in main() scope
+    // 10
+    push(vals, 10); push(nexts, head); head = len(vals) - 1;
+    // 20
+    push(vals, 20); push(nexts, head); head = len(vals) - 1;
+    // 30
+    push(vals, 30); push(nexts, head); head = len(vals) - 1;
+
+    if ll_length(nexts, head) != 3 then { puts("len: FAIL"); return 1; }
+    if ll_find(vals, nexts, head, 20) < 0 then { puts("find 20: FAIL"); return 1; }
+    if ll_find(vals, nexts, head, 99) >= 0 then { puts("find 99: FAIL"); return 1; }
+
+    // append 5 at tail
+    push(vals, 5);
+    var new_idx:i32 = len(vals) - 1;
+    push(nexts, -1);
+    if head < 0 then {
+        head = new_idx;
+    } else {
+        var tail:i32 = find_tail(nexts, head);
+        nexts[tail] = new_idx;
+    }
+
+    if ll_length(nexts, head) != 4 then { puts("len2: FAIL"); return 1; }
+
+    var arr:[i32] = ll_to_array(vals, nexts, head);
+    if arr[0] != 30 then { puts("arr[0]: FAIL"); return 1; }
+    if arr[3] != 5  then { puts("arr[3]: FAIL"); return 1; }
+
+    var out:str = "list: ";
+    for var i:i32 = 0, i < len(arr), i = i + 1 in {
+        out = out + str(arr[i]);
+        if i < len(arr) - 1 then { out = out + " -> "; }
+    }
+    puts(out);
+    puts("nodes: " + str(ll_length(nexts, head)));
+    puts("linked_list: OK");
+    return 0;
+}

@@ -1,0 +1,72 @@
+// ring_buffer.kang — fixed-capacity circular buffer, overwrites oldest
+
+// write val into buffer at position head+count, returns (new head, new count)
+def rb_write_h(data:[i32], head:i32, count:i32, val:i32) -> i32 {
+    var cap:i32 = len(data);
+    var idx:i32 = head + count;
+    if idx >= cap then { idx = idx - cap; }
+    data[idx] = val;
+    if count < cap then {
+        // head stays the same, count increases
+    }
+    if count >= cap then {
+        // advance head, oldest overwritten
+        head = head + 1;
+        if head >= cap then { head = head - cap; }
+    }
+    return head;
+}
+
+def rb_write_n(data:[i32], count:i32) -> i32 {
+    var cap:i32 = len(data);
+    if count < cap then { return count + 1; }
+    return count;
+}
+
+// read all current elements into a new array
+def rb_read_all(data:[i32], head:i32, count:i32) -> [i32] {
+    var result:[i32] = [];
+    var cap:i32 = len(data);
+    for var i:i32 = 0, i < count, i = i + 1 in {
+        var idx:i32 = head + i;
+        if idx >= cap then { idx = idx - cap; }
+        push(result, data[idx]);
+    }
+    return result;
+}
+
+def main() -> i32 {
+    var data:[i32] = [0, 0, 0, 0];
+    var head:i32 = 0;
+    var count:i32 = 0;
+
+    // write 1, 2, 3
+    head = rb_write_h(data, head, count, 1); count = rb_write_n(data, count);
+    head = rb_write_h(data, head, count, 2); count = rb_write_n(data, count);
+    head = rb_write_h(data, head, count, 3); count = rb_write_n(data, count);
+
+    if count != 3 then { puts("count1: FAIL"); return 1; }
+
+    // verify
+    var r1:[i32] = rb_read_all(data, head, count);
+    if r1[0] != 1 then { puts("r1[0]: FAIL"); return 1; }
+
+    // write 4, 5, 6 — overwrites oldest
+    head = rb_write_h(data, head, count, 4); count = rb_write_n(data, count);
+    head = rb_write_h(data, head, count, 5); count = rb_write_n(data, count);
+    head = rb_write_h(data, head, count, 6); count = rb_write_n(data, count);
+
+    var r2:[i32] = rb_read_all(data, head, count);
+    if len(r2) != 4 then { puts("size: FAIL"); return 1; }
+    if r2[0] != 3 then { var msg:str = "r2[0]: FAIL, got " + str(r2[0]); puts(msg); return 1; }
+    if r2[3] != 6 then { var msg:str = "r2[3]: FAIL, got " + str(r2[3]); puts(msg); return 1; }
+
+    var out:str = "buffer (last 4): ";
+    for var i:i32 = 0, i < len(r2), i = i + 1 in {
+        out = out + str(r2[i]);
+        if i < len(r2) - 1 then { out = out + ", "; }
+    }
+    puts(out);
+    puts("ring_buffer: OK");
+    return 0;
+}

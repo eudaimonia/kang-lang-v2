@@ -1,0 +1,64 @@
+// counter.kang — frequency counter using parallel arrays (keys, counts)
+
+// find index of key in keys array, -1 if not found
+def find_key(keys:[i32], key:i32) -> i32 {
+    for var i:i32 = 0, i < len(keys), i = i + 1 in {
+        if keys[i] == key then { return i; }
+    }
+    return -1;
+}
+
+// get count for key
+def get_count(keys:[i32], counts:[i32], key:i32) -> i32 {
+    var idx:i32 = find_key(keys, key);
+    if idx >= 0 then { return counts[idx]; }
+    return 0;
+}
+
+// find most frequent element
+def most_frequent(keys:[i32], counts:[i32]) -> i32 {
+    var max_key:i32 = keys[0];
+    var max_count:i32 = counts[0];
+    for var i:i32 = 1, i < len(counts), i = i + 1 in {
+        if counts[i] > max_count then {
+            max_count = counts[i];
+            max_key = keys[i];
+        }
+    }
+    return max_key;
+}
+
+def main() -> i32 {
+    var keys:[i32] = [];
+    var counts:[i32] = [];
+
+    var data:[i32] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
+    for var i:i32 = 0, i < len(data), i = i + 1 in {
+        var key:i32 = data[i];
+        var idx:i32 = find_key(keys, key);
+        if idx >= 0 then {
+            counts[idx] = counts[idx] + 1;
+        } else {
+            push(keys, key);
+            push(counts, 1);
+        }
+    }
+
+    if get_count(keys, counts, 1) != 2 then { puts("count 1: FAIL"); return 1; }
+    if get_count(keys, counts, 5) != 3 then { puts("count 5: FAIL"); return 1; }
+    if get_count(keys, counts, 9) != 1 then { puts("count 9: FAIL"); return 1; }
+    if get_count(keys, counts, 7) != 0 then { puts("count 7: FAIL"); return 1; }
+
+    var mf:i32 = most_frequent(keys, counts);
+    if mf != 5 then { puts("most_frequent: FAIL"); return 1; }
+
+    var out:str = "freq: ";
+    for var i:i32 = 0, i < len(keys), i = i + 1 in {
+        out = out + str(keys[i]) + "->" + str(counts[i]);
+        if i < len(keys) - 1 then { out = out + ", "; }
+    }
+    puts(out);
+    puts("most frequent: " + str(mf) + " (" + str(get_count(keys, counts, mf)) + "x)");
+    puts("counter: OK");
+    return 0;
+}

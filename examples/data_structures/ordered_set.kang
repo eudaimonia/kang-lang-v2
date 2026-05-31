@@ -1,0 +1,87 @@
+// ordered_set.kang — 有序集合, 用排序数组 + 二分查找实现插入/删除/查重
+
+// 二分查找插入位置 (第一个 >= val 的位置)
+def find_insert_pos(arr:[i32], val:i32) -> i32 {
+    var lo:i32 = 0;
+    var hi:i32 = len(arr);
+    for var done:bool = false, lo < hi && !done, done = done in {
+        var mid:i32 = lo + (hi - lo) / 2;
+        if arr[mid] < val then {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+// 检查元素是否存在
+def set_contains(arr:[i32], val:i32) -> bool {
+    var lo:i32 = 0;
+    var hi:i32 = len(arr) - 1;
+    for var found:bool = false, lo <= hi && !found, found = found in {
+        var mid:i32 = lo + (hi - lo) / 2;
+        if arr[mid] == val then {
+            return true;
+        }
+        if arr[mid] < val then {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return false;
+}
+
+// 插入元素 (保持有序, 不重复)
+// 通过构建新数组实现
+def set_insert(arr:[i32], val:i32) -> [i32] {
+    if set_contains(arr, val) then { return arr; }
+    var pos:i32 = find_insert_pos(arr, val);
+    var result:[i32] = [];
+    for var i:i32 = 0, i < pos, i = i + 1 in {
+        push(result, arr[i]);
+    }
+    push(result, val);
+    for var i:i32 = pos, i < len(arr), i = i + 1 in {
+        push(result, arr[i]);
+    }
+    return result;
+}
+
+// 集合大小
+def set_size(arr:[i32]) -> i32 {
+    return len(arr);
+}
+
+def main() -> i32 {
+    var s:[i32] = [];
+
+    s = set_insert(s, 5);
+    s = set_insert(s, 3);
+    s = set_insert(s, 8);
+    s = set_insert(s, 1);
+    s = set_insert(s, 3);  // 重复, 不插入
+    s = set_insert(s, 5);  // 重复, 不插入
+    s = set_insert(s, 9);
+    s = set_insert(s, 2);
+
+    // 期望: [1, 2, 3, 5, 8, 9]
+    if set_size(s) != 6 then { var msg:str = "size: FAIL, " + str(set_size(s)); puts(msg); return 1; }
+    if s[0] != 1 then { puts("s[0]: FAIL"); return 1; }
+    if s[5] != 9 then { puts("s[5]: FAIL"); return 1; }
+
+    if !set_contains(s, 5)  then { puts("contains 5: FAIL"); return 1; }
+    if set_contains(s, 7)   then { puts("contains 7: FAIL"); return 1; }
+
+    var out:str = "集合: ";
+    for var i:i32 = 0, i < len(s), i = i + 1 in {
+        out = out + str(s[i]);
+        if i < len(s) - 1 then { out = out + ", "; }
+    }
+    puts(out);
+    puts("插入 5,3,8,1,3,5,9,2 (去重, 有序)");
+    puts("contains(5) = true, contains(7) = false");
+    puts("ordered_set: OK");
+    return 0;
+}

@@ -1,0 +1,71 @@
+// bounded_stack.kang — bounded stack with O(1) min tracking
+
+// compute new minimum value to push given current mins array and new value
+def compute_min(mins:[i32], size:i32, val:i32) -> i32 {
+    if size == 0 then { return val; }
+    var cur_min:i32 = mins[size - 1];
+    if val < cur_min then { return val; }
+    return cur_min;
+}
+
+// get current minimum
+def bs_get_min(mins:[i32], size:i32) -> i32 {
+    return mins[size - 1];
+}
+
+def main() -> i32 {
+    var data:[i32] = [];
+    var mins:[i32] = [];
+    var size:i32 = 0;
+    var cap:i32 = 5;
+
+    // push 5, 3, 7, 3, 2
+    push(data, 5); push(mins, compute_min(mins, size, 5)); size = size + 1;
+    push(data, 3); push(mins, compute_min(mins, size, 3)); size = size + 1;
+    push(data, 7); push(mins, compute_min(mins, size, 7)); size = size + 1;
+    push(data, 3); push(mins, compute_min(mins, size, 3)); size = size + 1;
+    push(data, 2); push(mins, compute_min(mins, size, 2)); size = size + 1;
+
+    if size != 5 then {
+        var msg:str = "size: FAIL, got " + str(size);
+        puts(msg);
+        return 1;
+    }
+
+    // full check: size == cap, can't push
+    if size >= cap then {
+        // skip push, stays full
+    }
+
+    // min = 2
+    if bs_get_min(mins, size) != 2 then { puts("min1: FAIL"); return 1; }
+
+    // pop 2, min becomes 3
+    size = size - 1;
+    var v1:i32 = data[size];
+    if v1 != 2 then { puts("pop1: FAIL"); return 1; }
+    if bs_get_min(mins, size) != 3 then { puts("min2: FAIL"); return 1; }
+
+    // pop 3, min stays 3
+    size = size - 1;
+    var v2:i32 = data[size];
+    if v2 != 3 then { puts("pop2: FAIL"); return 1; }
+    if bs_get_min(mins, size) != 3 then { puts("min3: FAIL"); return 1; }
+
+    // pop 7, min stays 3
+    size = size - 1;
+    var v3:i32 = data[size];
+    if v3 != 7 then { puts("pop3: FAIL"); return 1; }
+    if bs_get_min(mins, size) != 3 then { puts("min4: FAIL"); return 1; }
+
+    // pop 3, min becomes 5
+    size = size - 1;
+    var v4:i32 = data[size];
+    if v4 != 3 then { puts("pop4: FAIL"); return 1; }
+    if bs_get_min(mins, size) != 5 then { puts("min5: FAIL"); return 1; }
+
+    puts("push: 5, 3, 7, 3, 2");
+    puts("pop: 2 (min=3), 3 (min=3), 7 (min=3), 3 (min=5)");
+    puts("bounded_stack: OK");
+    return 0;
+}
