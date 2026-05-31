@@ -37,13 +37,13 @@ unsafe extern "C" {
     fn fputc(c: i32, stream: *mut FILE) -> i32;
     fn fseek(stream: *mut FILE, offset: i64, whence: i32) -> i32;
     fn ftell(stream: *mut FILE) -> i64;
-    fn snprintf(s: *mut u8, n: usize, format: *const u8, ...) -> i32;
 
     // string
     fn strlen(s: *const u8) -> usize;
     fn strcmp(s1: *const u8, s2: *const u8) -> i32;
 
     // stdlib
+    // strtol 在 64 位平台上 c_long = i64；若需要 32 位需改为 #[cfg] 区分
     fn strtol(nptr: *const u8, endptr: *mut *mut u8, base: i32) -> i64;
     fn strtod(nptr: *const u8, endptr: *mut *mut u8) -> f64;
     fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8;
@@ -81,12 +81,14 @@ const SEEK_END: i32 = 2;
 // ── 辅助函数 ────────────────────────────────────────────────────────────────────
 
 /// Rust str 数据 → C null-terminated 字符串（arena 分配）
-/// 若 len < 0（编译器 bug），返回空字符串避免 OOM
+/// 若 len < 0 或 s 为空（编译器 bug），返回空字符串避免 UB
 unsafe fn to_c_str(s: *const u8, len: i32) -> *mut u8 {
-    let actual_len = if len < 0 { 0 } else { len };
+    let actual_len = if len < 0 || s.is_null() { 0 } else { len };
     unsafe {
         let buf = k_arena_alloc(actual_len as usize + 1);
-        memcpy(buf, s, actual_len as usize);
+        if actual_len > 0 {
+            memcpy(buf, s, actual_len as usize);
+        }
         *buf.add(actual_len as usize) = 0;
         buf
     }
@@ -100,6 +102,117 @@ unsafe fn strip_newline(s: *mut u8, len: *mut i32) {
             *len -= 1;
         }
     }
+}
+
+/// 将 i32 格式化为十进制字符串到栈缓冲区，返回 (ptr, len)
+/// 替代 variadic snprintf FFI（variadic FFI 在 Rust 中是未定义行为）
+fn format_i32(n: i32) -> (usize, [u8; 12]) {
+    let mut buf = [0u8; 12];
+    if n == 0 {
+        buf[0] = b'0';
+        return (1, buf);
+    }
+    let mut pos = 12;
+    // 用 u32 处理避免 i32::MIN 取负溢出
+    let mut abs = if n == i32::MIN {
+        (i32::MAX as u32) + 1
+    } else if n < 0 {
+        (-n) as u32
+    } else {
+        n as u32
+    };
+    while abs > 0 {
+        pos -= 1;
+        buf[pos] = b'0' + (abs % 10) as u8;
+        abs /= 10;
+    }
+    if n < 0 {
+        pos -= 1;
+        buf[pos] = b'-';
+    }
+    let len = 12 - pos;
+    // 移动到缓冲区开头
+    let mut out = [0u8; 12];
+    out[..len].copy_from_slice(&buf[pos..]);
+    (len, out)
+}
+
+/// f64 绝对值（no_std 兼容，用位操作避免 libm）
+fn f64_abs(n: f64) -> f64 {
+    f64::from_bits(n.to_bits() & 0x7fffffffffffffff)
+}
+
+/// f64 截断到整数部分（向零方向，no_std 兼容）
+fn f64_trunc(n: f64) -> f64 {
+    (n as i64) as f64
+}
+
+/// 将 f64 格式化为字符串到栈缓冲区，返回 (ptr, len)
+/// 使用定点格式 + 最多 6 位小数，替代 variadic snprintf FFI
+fn format_f64(n: f64) -> (usize, [u8; 64]) {
+    let mut buf = [0u8; 64];
+
+    // 特殊值
+    if n.is_nan() {
+        buf[..3].copy_from_slice(b"nan");
+        return (3, buf);
+    }
+    if n.is_infinite() {
+        if n.is_sign_negative() {
+            buf[..4].copy_from_slice(b"-inf");
+            return (4, buf);
+        }
+        buf[..3].copy_from_slice(b"inf");
+        return (3, buf);
+    }
+
+    let neg = n.is_sign_negative();
+    let abs = f64_abs(n);
+
+    if abs == 0.0 {
+        buf[0] = b'0';
+        return (1, buf);
+    }
+
+    // 对于极大/极小值，用 as i64 cast 会溢出；此类值按 0 处理（防御性）
+    if abs >= i64::MAX as f64 {
+        buf[..3].copy_from_slice(b"inf");
+        return (3, buf);
+    }
+
+    let mut pos = 0;
+    if neg { buf[pos] = b'-'; pos += 1; }
+
+    // 缩放以获得最多 6 位小数精度
+    let scaled = f64_trunc(abs * 1_000_000.0) as u64;
+    let int_part = scaled / 1_000_000;
+    let frac_part = scaled % 1_000_000;
+
+    // 整数部分
+    let mut tmp = [0u8; 20];
+    let mut tp = 20;
+    let mut ip = int_part;
+    if ip == 0 { tp -= 1; tmp[tp] = b'0'; }
+    while ip > 0 { tp -= 1; tmp[tp] = b'0' + (ip % 10) as u8; ip /= 10; }
+    let ip_len = 20 - tp;
+    buf[pos..pos+ip_len].copy_from_slice(&tmp[tp..]);
+    pos += ip_len;
+
+    // 小数部分（去掉尾部零）
+    if frac_part > 0 {
+        buf[pos] = b'.'; pos += 1;
+        let mut fp = frac_part;
+        let mut fd = [0u8; 6];
+        let mut fpos = 6;
+        while fpos > 0 { fpos -= 1; fd[fpos] = b'0' + (fp % 10) as u8; fp /= 10; }
+        // 找到最后非零位
+        let mut end = 6;
+        while end > 0 && fd[end-1] == b'0' { end -= 1; }
+        buf[pos..pos+end].copy_from_slice(&fd[..end]);
+        pos += end;
+    }
+
+    (pos, buf)
 }
 
 // ── 数组操作 ────────────────────────────────────────────────────────────────────
@@ -121,21 +234,27 @@ pub unsafe extern "C" fn k_push(
 ) -> KPtrLen {
     unsafe {
         // 防御性校验: 编译器不应生成非法参数，但运行时做底线防御
-        let safe_arr_len = if arr_len < 0 { 0 } else { arr_len };
-        let safe_elem_size = if elem_size <= 0 { 1 } else { elem_size };
-        let new_len = safe_arr_len + 1;
-        let new_arr = k_arena_alloc(4 + (new_len * safe_elem_size) as usize);
+        let safe_arr_len = if arr_len < 0 { 0 } else { arr_len as i64 };
+        let safe_elem_size = if elem_size <= 0 { 1 } else { elem_size as i64 };
+
+        // 使用 i64 防止溢出，之后截断到 usize（真实环境下不可能超过）
+        let new_len = safe_arr_len.saturating_add(1);
+        let old_bytes = safe_arr_len.saturating_mul(safe_elem_size);
+        let new_bytes = new_len.saturating_mul(safe_elem_size);
+        let total_size = 4u64.saturating_add(new_bytes as u64);
+
+        let new_arr = k_arena_alloc(total_size as usize);
         // 写入新长度
-        *(new_arr as *mut i32) = new_len;
+        *(new_arr as *mut i32) = new_len as i32;
         // 拷贝旧元素
         if safe_arr_len > 0 && !arr.is_null() {
-            memcpy(new_arr.add(4), arr.add(4), (safe_arr_len * safe_elem_size) as usize);
+            memcpy(new_arr.add(4), arr.add(4), old_bytes as usize);
         }
         // 拷贝新元素
         if !elem.is_null() {
-            memcpy(new_arr.add(4 + (safe_arr_len * safe_elem_size) as usize), elem, safe_elem_size as usize);
+            memcpy(new_arr.add(4 + old_bytes as usize), elem, safe_elem_size as usize);
         }
-        KPtrLen { ptr: new_arr, len: new_len }
+        KPtrLen { ptr: new_arr, len: new_len as i32 }
     }
 }
 
@@ -146,8 +265,8 @@ pub unsafe extern "C" fn k_push(
 pub unsafe extern "C" fn k_puts(s: *const u8, len: i32) {
     unsafe {
         let c_str = to_c_str(s, len);
-        fputs(c_str, stdout_ptr());
-        fputc(b'\n' as i32, stdout_ptr());
+        let _ = fputs(c_str, stdout_ptr());
+        let _ = fputc(b'\n' as i32, stdout_ptr());
     }
 }
 
@@ -156,7 +275,7 @@ pub unsafe extern "C" fn k_puts(s: *const u8, len: i32) {
 pub unsafe extern "C" fn k_print(s: *const u8, len: i32) {
     unsafe {
         let c_str = to_c_str(s, len);
-        fputs(c_str, stdout_ptr());
+        let _ = fputs(c_str, stdout_ptr());
     }
 }
 
@@ -165,7 +284,7 @@ pub unsafe extern "C" fn k_print(s: *const u8, len: i32) {
 pub unsafe extern "C" fn k_eprint(s: *const u8, len: i32) {
     unsafe {
         let c_str = to_c_str(s, len);
-        fputs(c_str, stderr_ptr());
+        let _ = fputs(c_str, stderr_ptr());
     }
 }
 
@@ -180,9 +299,15 @@ pub unsafe extern "C" fn k_read_file(path: *const u8, path_len: i32) -> KStrBool
         if file.is_null() {
             return KStrBool { ptr: core::ptr::null(), len: 0, ok: 0 };
         }
-        fseek(file, 0, SEEK_END);
+        if fseek(file, 0, SEEK_END) != 0 {
+            fclose(file);
+            return KStrBool { ptr: core::ptr::null(), len: 0, ok: 0 };
+        }
         let size = ftell(file);
-        fseek(file, 0, SEEK_SET);
+        if fseek(file, 0, SEEK_SET) != 0 {
+            fclose(file);
+            return KStrBool { ptr: core::ptr::null(), len: 0, ok: 0 };
+        }
         if size < 0 {
             fclose(file);
             return KStrBool { ptr: core::ptr::null(), len: 0, ok: 0 };
@@ -228,8 +353,8 @@ pub unsafe extern "C" fn k_write_file(
         if file.is_null() {
             return;
         }
-        fputs(content_c, file);
-        fclose(file);
+        let _ = fputs(content_c, file);
+        let _ = fclose(file);
     }
 }
 
@@ -248,8 +373,8 @@ pub unsafe extern "C" fn k_append_file(
         if file.is_null() {
             return;
         }
-        fputs(content_c, file);
-        fclose(file);
+        let _ = fputs(content_c, file);
+        let _ = fclose(file);
     }
 }
 
@@ -292,9 +417,10 @@ pub unsafe extern "C" fn k_str_concat(
     b_len: i32,
 ) -> KPtrLen {
     unsafe {
-        let safe_a_len = if a_len < 0 { 0 } else { a_len };
-        let safe_b_len = if b_len < 0 { 0 } else { b_len };
-        let total = safe_a_len + safe_b_len;
+        let safe_a_len = if a_len < 0 { 0 } else { a_len as i64 };
+        let safe_b_len = if b_len < 0 { 0 } else { b_len as i64 };
+        let total = safe_a_len.saturating_add(safe_b_len);
+        // 在大约 2^63 以内（实际不可能），saturating 不会溢出
         let buf = k_arena_alloc(total as usize + 1);
         if safe_a_len > 0 && !a_ptr.is_null() {
             memcpy(buf, a_ptr, safe_a_len as usize);
@@ -303,35 +429,34 @@ pub unsafe extern "C" fn k_str_concat(
             memcpy(buf.add(safe_a_len as usize), b_ptr, safe_b_len as usize);
         }
         *buf.add(total as usize) = 0;
-        KPtrLen { ptr: buf, len: total }
+        KPtrLen { ptr: buf, len: total as i32 }
     }
 }
 
 // ── 类型转换 ────────────────────────────────────────────────────────────────────
 
-/// str(n: i32) -> str — snprintf 到 arena
-/// i32 最大值 "−2147483648" 为 11 字符 + null = 12，32 字节足够
+/// str(n: i32) -> str — 使用 native Rust 格式化（避免 variadic FFI UB）
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn k_str_i32(n: i32) -> KStr {
+    let (len, bytes) = format_i32(n);
+    let buf = unsafe { k_arena_alloc(len + 1) };
     unsafe {
-        let buf = k_arena_alloc(32);
-        let len = snprintf(buf, 32, b"%d\0".as_ptr(), n);
-        // snprintf 返回应写入的字节数；若 >=32 说明被截断，这里不应发生
-        let safe_len = if len >= 32 { 31 } else { len };
-        KStr { ptr: buf, len: safe_len as i32 }
+        memcpy(buf, bytes.as_ptr(), len);
+        *buf.add(len) = 0;
     }
+    KStr { ptr: buf, len: len as i32 }
 }
 
-/// str(n: f64) -> str — snprintf 到 arena
-/// "%.10g" 格式最多约 25 字符，64 字节缓冲区足够
+/// str(n: f64) -> str — 使用 native Rust 格式化（避免 variadic FFI UB）
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn k_str_f64(n: f64) -> KStr {
+    let (len, bytes) = format_f64(n);
+    let buf = unsafe { k_arena_alloc(len + 1) };
     unsafe {
-        let buf = k_arena_alloc(64);
-        let len = snprintf(buf, 64, b"%.10g\0".as_ptr(), n);
-        let safe_len = if len >= 64 { 63 } else { len };
-        KStr { ptr: buf, len: safe_len as i32 }
+        memcpy(buf, bytes.as_ptr(), len);
+        *buf.add(len) = 0;
     }
+    KStr { ptr: buf, len: len as i32 }
 }
 
 /// str(b: bool) -> str — 返回 "true" 或 "false"（arena 分配）

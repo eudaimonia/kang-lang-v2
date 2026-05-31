@@ -13,6 +13,11 @@ struct Chunk {
 }
 
 /// 全局分配器状态
+///
+/// # 设计约束
+/// kangrt 永久单线程运行。Kang 程序无多线程模型，信号处理器不触发分配。
+/// 这三个 static mut 在单线程访问下是安全的，无需同步开销。
+/// 若未来引入多线程，必须重构为 `UnsafeCell` + 适当的同步原语。
 static mut HEAD: *mut Chunk = core::ptr::null_mut();
 static mut BUMP: *mut u8 = core::ptr::null_mut();
 static mut REMAINING: usize = 0;
@@ -45,12 +50,17 @@ unsafe fn new_chunk(size: usize) -> *mut Chunk {
 }
 
 /// 在 arena 中分配 size 字节对齐内存，返回指针（失败时 panic）
+///
+/// # Safety
+/// `align` 必须是 2 的幂，否则为未定义行为
 unsafe fn alloc(size: usize, align: usize) -> *mut u8 {
+    debug_assert!(align.is_power_of_two(), "align 必须是 2 的幂，got: {align}");
+
     let bump = unsafe { BUMP };
     let remaining = unsafe { REMAINING };
 
     let offset = bump.align_offset(align);
-    let needed = offset + size;
+    let needed = offset.checked_add(size).unwrap_or(usize::MAX);
 
     if needed <= remaining {
         let ptr = unsafe { bump.add(offset) };
@@ -65,7 +75,9 @@ unsafe fn alloc(size: usize, align: usize) -> *mut u8 {
 
     // 当前 chunk 不够，分配新的 chunk
     let chunk_size = if size + align > CHUNK_SIZE {
-        size + align + 1024
+        size.checked_add(align)
+            .and_then(|v| v.checked_add(1024))
+            .unwrap_or(usize::MAX)
     } else {
         CHUNK_SIZE
     };
@@ -80,7 +92,7 @@ unsafe fn alloc(size: usize, align: usize) -> *mut u8 {
     let ptr = unsafe { bump.add(offset) };
     unsafe {
         BUMP = ptr.add(size);
-        REMAINING -= offset + size;
+        REMAINING -= offset.checked_add(size).unwrap_or(usize::MAX);
         core::ptr::write_bytes(ptr, 0, size);
     }
     ptr

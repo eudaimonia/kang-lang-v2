@@ -10,8 +10,8 @@ use inkwell::AddressSpace;
 
 type Result<T> = std::result::Result<T, CodeGenError>;
 
-fn ok<T>(r: std::result::Result<T, inkwell::builder::BuilderError>) -> T {
-    r.unwrap()
+fn ok<T>(r: std::result::Result<T, inkwell::builder::BuilderError>) -> Result<T> {
+    r.map_err(|e| CodeGenError { msg: format!("LLVM builder error: {}", e) })
 }
 
 /// 生成语句的 LLVM IR
@@ -51,13 +51,13 @@ fn codegen_var_decl<'ctx>(
         KangType::Pair(_, _) => {
             // 二值解包
             let struct_val = init_val.into_struct_value();
-            let v0 = ok(ctx.builder.build_extract_value(struct_val, 0, "unpack.0"));
-            let v1 = ok(ctx.builder.build_extract_value(struct_val, 1, "unpack.1"));
+            let v0 = ok(ctx.builder.build_extract_value(struct_val, 0, "unpack.0"))?;
+            let v1 = ok(ctx.builder.build_extract_value(struct_val, 1, "unpack.1"))?;
             let values = vec![v0.into(), v1.into()];
             for (i, (name, ty, is_discard)) in bindings.iter().enumerate() {
                 if !is_discard {
                     let val = values.get(i).copied().unwrap_or_else(|| ctx.default_value(ty));
-                    let alloca = ok(ctx.builder.build_alloca(ctx.kang_type_to_basic(ty), &format!("var.{}", name)));
+                    let alloca = ok(ctx.builder.build_alloca(ctx.kang_type_to_basic(ty), &format!("var.{}", name)))?;
                     let _ = ctx.builder.build_store(alloca, val);
                     ctx.register_var(name, alloca, ty.clone());
                 }
@@ -67,7 +67,7 @@ fn codegen_var_decl<'ctx>(
             // 单值: 可能单接收从二值返回（取第一值）
             for (name, ty, is_discard) in bindings {
                 if !is_discard {
-                    let alloca = ok(ctx.builder.build_alloca(ctx.kang_type_to_basic(&ty), &format!("var.{}", name)));
+                    let alloca = ok(ctx.builder.build_alloca(ctx.kang_type_to_basic(&ty), &format!("var.{}", name)))?;
                     let _ = ctx.builder.build_store(alloca, init_val);
                     ctx.register_var(name, alloca, ty.clone());
                 }
@@ -113,24 +113,24 @@ fn codegen_lvalue_ptr<'ctx>(
                 KangType::Array(e) => &**e,
                 _ => return Err(CodeGenError { msg: "只能对数组使用索引赋值".into() }),
             };
-            let elem_size = size_of_kang(elem_ty);
+            let elem_size = size_of_kang(ctx, elem_ty);
             let elem_size_val = ctx.context.i32_type().const_int(elem_size as u64, true);
-            let offset = ok(ctx.builder.build_int_mul(idx, elem_size_val, "offset"));
+            let offset = ok(ctx.builder.build_int_mul(idx, elem_size_val, "offset"))?;
 
-            let raw_int = ok(ctx.builder.build_ptr_to_int(arr_ptr, ctx.context.i64_type(), "ptr.int"));
-            let base = ok(ctx.builder.build_int_add(raw_int, ctx.context.i64_type().const_int(4u64, false), "base"));
-            let offset64 = ok(ctx.builder.build_int_z_extend(offset, ctx.context.i64_type(), "offset.64"));
-            let elem_int = ok(ctx.builder.build_int_add(base, offset64, "elem.addr"));
+            let raw_int = ok(ctx.builder.build_ptr_to_int(arr_ptr, ctx.context.i64_type(), "ptr.int"))?;
+            let base = ok(ctx.builder.build_int_add(raw_int, ctx.context.i64_type().const_int(4u64, false), "base"))?;
+            let offset64 = ok(ctx.builder.build_int_z_extend(offset, ctx.context.i64_type(), "offset.64"))?;
+            let elem_int = ok(ctx.builder.build_int_add(base, offset64, "elem.addr"))?;
             let elem_ptr = ok(ctx.builder.build_int_to_ptr(
                 elem_int,
                 ctx.context.ptr_type(AddressSpace::default()),
                 "elem.ptr",
-            ));
+            ))?;
             let typed_ptr = ok(ctx.builder.build_pointer_cast(
                 elem_ptr,
                 ctx.context.ptr_type(AddressSpace::default()),
                 "elem.typed",
-            ));
+            ))?;
             Ok(typed_ptr)
         }
         LValue::FieldAccess { obj, field, .. } => {
@@ -149,13 +149,14 @@ fn codegen_lvalue_ptr<'ctx>(
                 .position(|(n, _)| n == field)
                 .ok_or_else(|| CodeGenError { msg: format!("字段不存在: {}", field) })?;
 
-            let struct_type = ctx.lookup_struct_type(&struct_name).unwrap();
+            let struct_type = ctx.lookup_struct_type(&struct_name)
+                .ok_or_else(|| CodeGenError { msg: format!("结构体类型未注册: {}", struct_name) })?;
             let gep = ok(ctx.builder.build_struct_gep(
                 struct_type,
                 struct_ptr,
                 field_idx as u32,
                 "field.ptr",
-            ));
+            ))?;
             Ok(gep)
         }
     }
@@ -173,12 +174,12 @@ fn resolve_array_ptr<'ctx>(
                 .lookup_var(name)
                 .ok_or_else(|| CodeGenError { msg: format!("未定义变量: {}", name) })?;
             // 加载数组 struct {i8*, i32}, 提取 data 指针
-            let arr_struct = ok(ctx.builder.build_load(ctx.kang_type_to_basic(&ty), alloca, "arr.load"));
+            let arr_struct = ok(ctx.builder.build_load(ctx.kang_type_to_basic(&ty), alloca, "arr.load"))?;
             let data_ptr = ok(ctx.builder.build_extract_value(
                 arr_struct.into_struct_value(),
                 0,
                 "arr.data",
-            ));
+            ))?;
             Ok((data_ptr.into_pointer_value(), ty))
         }
         _ => Err(CodeGenError { msg: "数组索引左值必须是变量".into() }),
@@ -211,7 +212,7 @@ fn codegen_expr_raw<'ctx>(
             let (alloca, ty) = ctx
                 .lookup_var(name)
                 .ok_or_else(|| CodeGenError { msg: format!("未定义变量: {}", name) })?;
-            let val = ok(ctx.builder.build_load(ctx.kang_type_to_basic(&ty), alloca, "lval.load"));
+            let val = ok(ctx.builder.build_load(ctx.kang_type_to_basic(&ty), alloca, "lval.load"))?;
             Ok(val)
         }
         crate::ast::Expr::IntLit(v, ..) => {
@@ -241,8 +242,8 @@ fn codegen_return<'ctx>(
             let v1 = codegen_expr(ctx, &values[1])?;
             let pair_type = ctx.kang_type_to_basic(func_return).into_struct_type();
             let undef = pair_type.const_zero();
-            let s1 = ok(ctx.builder.build_insert_value(undef, v0, 0, "pair.packed.0")).into_struct_value();
-            let packed = ok(ctx.builder.build_insert_value(s1, v1, 1, "pair.packed.1")).into_struct_value();
+            let s1 = ok(ctx.builder.build_insert_value(undef, v0, 0, "pair.packed.0"))?.into_struct_value();
+            let packed = ok(ctx.builder.build_insert_value(s1, v1, 1, "pair.packed.1"))?.into_struct_value();
             let _ = ctx.builder.build_return(Some(&packed));
         }
         _ => {
@@ -268,7 +269,7 @@ fn codegen_if<'ctx>(
         cond.into_int_value(),
         ctx.context.bool_type().const_zero(),
         "if.cond",
-    ));
+    ))?;
 
     let current_fn = ctx.builder.get_insert_block().unwrap().get_parent().unwrap();
 
@@ -320,7 +321,7 @@ fn codegen_for<'ctx>(
     let current_fn = ctx.builder.get_insert_block().unwrap().get_parent().unwrap();
 
     // 初始化循环变量
-    let alloca = ok(ctx.builder.build_alloca(ctx.kang_type_to_basic(var_type), var_name));
+    let alloca = ok(ctx.builder.build_alloca(ctx.kang_type_to_basic(var_type), var_name))?;
     let _ = ctx.builder.build_store(alloca, start_val);
     ctx.push_scope();
     ctx.register_var(var_name, alloca, var_type.clone());
@@ -340,7 +341,7 @@ fn codegen_for<'ctx>(
         cond_val.into_int_value(),
         ctx.context.bool_type().const_zero(),
         "for.cond",
-    ));
+    ))?;
     let _ = ctx.builder.build_conditional_branch(cond_bool, body_bb, end_bb);
 
     // 循环体

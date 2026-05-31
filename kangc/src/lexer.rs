@@ -91,7 +91,8 @@ pub enum TokenKind {
 fn parse_string(lex: &mut logos::Lexer<TokenKind>) -> Option<String> {
     let raw = lex.slice();
     // 使用 strip 避免 raw.len() < 2 时下溢（正则保证至少 ""，此处防御）
-    let inner = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or("");
+    // logos 的 callback 仅在正则匹配时调用，slice 保证以引号起止
+    let inner = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(raw);
     let mut result = String::with_capacity(inner.len());
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {

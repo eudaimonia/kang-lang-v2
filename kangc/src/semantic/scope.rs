@@ -76,9 +76,8 @@ impl SymbolTable {
     }
 
     pub fn pop_scope(&mut self) -> Vec<SymbolEntry> {
-        // 调试断言: 不应弹出全局作用域（至少保留一个）
-        debug_assert!(self.scopes.len() > 1, "pop_scope: 不能弹出全局作用域");
-        let scope = self.scopes.pop().unwrap_or_else(|| Scope::new());
+        assert!(self.scopes.len() > 1, "pop_scope: 不能弹出全局作用域");
+        let scope = self.scopes.pop().unwrap();
         scope.symbols.into_values().collect()
     }
 
@@ -92,6 +91,9 @@ impl SymbolTable {
                         parent.symbols.insert(name, entry);
                     }
                 }
+            } else {
+                // 没有外层作用域：不应发生，将符号推回
+                self.scopes.push(top);
             }
         }
     }

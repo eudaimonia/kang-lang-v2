@@ -27,6 +27,9 @@ pub struct ParseError {
     pub line: usize,
     pub col: usize,
     pub span: Range<usize>,
+    /// true = 输入不完整（EOF 处期望更多 token），REPL 应继续读取
+    /// false = 语法错误，REPL 应报错并清空缓冲区
+    pub is_incomplete: bool,
 }
 
 #[derive(Debug, Clone)]

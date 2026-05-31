@@ -24,6 +24,7 @@ fn main() {
         "codegen" | "emit-llvm" => cmd_codegen(rest),
         "build" => cmd_build(rest),
         "run" => cmd_run(rest),
+        "repl" => kangc::repl::run_repl(),
         _ => {
             eprintln!("未知子命令: {}", subcmd);
             process::exit(1);
@@ -42,6 +43,7 @@ fn print_usage() {
     eprintln!("  emit-llvm <file> [-o <file>] [--stats] [--target=<triple>]    同 codegen");
     eprintln!("  build     <file> [-o <file>] [--stats] [--target=<triple>] [--emit=<stage>]  AOT 编译");
     eprintln!("  run       <file> [--stats] [--target=<triple>]                  编译并执行");
+    eprintln!("  repl                                                               启动交互式解释器");
 }
 
 // ── 参数解析 ────────────────────────────────────────────────────────────────
@@ -143,21 +145,20 @@ fn cmd_build(args: &[String]) {
         return;
     }
 
-    // 生成 .o 文件
-    let obj_path = if cargs.out_path.is_some() && emit == Some(PipelineStage::Object) {
-        // --emit=object -o <path>: .o 写入指定路径
-        cargs.out_path.clone().unwrap()
-    } else {
-        cargs.file_path.with_extension("o")
+    // 生成 .o 文件路径
+    let emit_obj_only = emit == Some(PipelineStage::Object);
+    let obj_path = match (&cargs.out_path, emit_obj_only) {
+        (Some(p), true) => p.clone(),  // --emit=object -o <path>
+        _ => cargs.file_path.with_extension("o"),
     };
 
-    // 提前计算链接相关路径（避免后续 move cargs.out_path）
+    // 可执行文件路径
     let exe_path = cargs.out_path.clone().unwrap_or_else(|| {
         let mut p = cargs.file_path.clone();
         p.set_extension("");
         p
     });
-    let stdout_obj = cargs.out_path.is_none() && emit == Some(PipelineStage::Object);
+    let stdout_obj = cargs.out_path.is_none() && emit_obj_only;
 
     let source = read_file(&cargs.file_path);
     let target_triple = cargs.target.as_deref();
@@ -174,7 +175,7 @@ fn cmd_build(args: &[String]) {
                 // 默认: 链接为可执行文件
                 let kangrt_path = find_or_build_kangrt(target_triple);
                 link_executable(&obj_path, &kangrt_path, &exe_path);
-                let _ = std::fs::remove_file(&obj_path);
+                remove_file(&obj_path);
             } else if stdout_obj {
                 // --emit=object 无 -o: 输出路径到 stdout
                 println!("{}", obj_path.display());
@@ -183,7 +184,11 @@ fn cmd_build(args: &[String]) {
                 print_stats(&stats, stage);
             }
         }
-        Ok(_) => unreachable!(),
+        Ok((_, None)) => {
+            // Object 阶段应始终有输出文件路径，此分支不应到达
+            eprintln!("内部错误: 编译未生成输出文件");
+            process::exit(1);
+        }
         Err(e) => {
             emit_diagnostic(&e, &source, &cargs.file_path.to_string_lossy());
             process::exit(1);
@@ -210,22 +215,34 @@ fn cmd_run(args: &[String]) {
         Ok((stats, _)) => {
             let kangrt_path = find_or_build_kangrt(target_triple);
             link_executable(&obj_path, &kangrt_path, &exe_path);
-            let _ = std::fs::remove_file(&obj_path);
+            remove_file(&obj_path);
 
             if cargs.show_stats {
                 print_stats(&stats, PipelineStage::Object);
             }
 
             // 执行生成的可执行文件
+            // 安全检查: 拒绝在系统目录中执行（防止覆盖系统二进制）
+            let exe_parent = exe_path.parent().unwrap_or(Path::new("."));
+            let is_system_dir = exe_parent.starts_with("/usr/bin")
+                || exe_parent.starts_with("/bin")
+                || exe_parent.starts_with("/sbin")
+                || exe_parent.starts_with("/usr/sbin");
+            if is_system_dir {
+                eprintln!("安全拒绝: 不会在系统目录 ({}) 中生成并执行二进制", exe_parent.display());
+                remove_file(&obj_path);
+                process::exit(1);
+            }
+
             let exit_status = process::Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {
                     eprintln!("无法执行程序 {}: {}", exe_path.display(), e);
-                    let _ = std::fs::remove_file(&exe_path);
+                    remove_file(&exe_path);
                     process::exit(1);
                 });
 
-            let _ = std::fs::remove_file(&exe_path);
+            remove_file(&exe_path);
 
             if !exit_status.success() {
                 process::exit(exit_status.code().unwrap_or(1));
@@ -308,6 +325,9 @@ fn print_stats(stats: &CompilerStats, stage: PipelineStage) {
 // ── 链接基础设施 ────────────────────────────────────────────────────────────
 
 /// 查找 workspace 根目录（kangc/Cargo.toml 的父目录）
+///
+/// 使用 cargo 编译期环境变量定位。若二进制被移出 cargo target 目录独立发布，
+/// 此路径可能失效——届时需通过 KANG_HOME 环境变量或可执行文件旁路查找运行时库。
 fn find_project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -353,15 +373,19 @@ fn find_or_build_kangrt(target_triple: Option<&str>) -> PathBuf {
 }
 
 /// 使用系统 cc 链接 .o 文件 + libkangrt.a → 可执行文件
+///
+/// 当前默认使用宿主 cc，交叉编译需通过 --target 传递对应 cross-gcc。
+/// 未来可改为通过 LLVM lld 链接以统一交叉编译体验。
 fn link_executable(obj_path: &Path, kangrt_path: &Path, out_path: &Path) {
-    let status = process::Command::new("cc")
+    let linker = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let status = process::Command::new(&linker)
         .arg(obj_path)
         .arg(kangrt_path)
         .arg("-o")
         .arg(out_path)
         .status()
         .unwrap_or_else(|e| {
-            eprintln!("无法启动链接器 cc: {}", e);
+            eprintln!("无法启动链接器 {}: {}", linker, e);
             process::exit(1);
         });
 
@@ -378,4 +402,10 @@ fn read_file(path: &PathBuf) -> String {
         eprintln!("读取文件失败 {}: {}", path.display(), e);
         process::exit(1);
     })
+}
+
+fn remove_file(path: &Path) {
+    if let Err(e) = std::fs::remove_file(path) {
+        eprintln!("警告: 无法删除临时文件 {}: {}", path.display(), e);
+    }
 }

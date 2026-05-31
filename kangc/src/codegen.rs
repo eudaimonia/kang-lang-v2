@@ -52,7 +52,7 @@ pub fn codegen(
     // 验证生成的 LLVM IR
     if let Err(e) = ctx.module.verify() {
         return Err(CodeGenError {
-            msg: format!("LLVM IR 验证失败: {}", e.to_string().lines().next().unwrap_or("")),
+            msg: format!("LLVM IR 验证失败:\n{}", e),
         });
     }
 

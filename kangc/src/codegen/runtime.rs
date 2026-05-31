@@ -1,7 +1,7 @@
 // 运行时安全检查 — 插入索引越界、除零等运行时检查
 
 use super::context::CodeGenContext;
-use inkwell::values::IntValue;
+use inkwell::values::{FloatValue, IntValue};
 use inkwell::AddressSpace;
 
 /// 获取或创建全局错误消息字符串，返回 (ptr, len)
@@ -38,7 +38,8 @@ fn panic_msg_global<'ctx>(
 fn call_panic<'ctx>(ctx: &mut CodeGenContext<'ctx>, msg: &[u8], tag: &str) {
     let global_name = format!("panic.msg.{}", tag);
     let (ptr, len) = panic_msg_global(ctx, &global_name, msg);
-    let panic_func = ctx.module.get_function("k_panic").expect("k_panic 应在 builtins 已声明");
+    let panic_func = ctx.module.get_function("k_panic")
+        .expect("k_panic 应在 builtins::declare_all 中已声明");
     let _ = ctx.builder.build_call(panic_func, &[ptr.into(), len.into()], "panic");
     let _ = ctx.builder.build_unreachable();
 }
@@ -114,6 +115,31 @@ pub fn insert_div_zero_check<'ctx>(
     call_panic(ctx, b"division by zero", "divz");
 
     // 正常路径
+    ctx.builder.position_at_end(ok_bb);
+}
+
+/// 插入浮点除零检查: divisor != 0.0
+pub fn insert_float_div_zero_check<'ctx>(
+    ctx: &mut CodeGenContext<'ctx>,
+    divisor: FloatValue<'ctx>,
+) {
+    ctx.runtime_checks += 1;
+
+    let current_fn = ctx.builder.get_insert_block().unwrap().get_parent().unwrap();
+
+    let zero = ctx.context.f64_type().const_float(0.0);
+    let is_zero = ctx.builder.build_float_compare(
+        inkwell::FloatPredicate::OEQ, divisor, zero, "fdivz",
+    ).unwrap();
+
+    let fail_bb = ctx.context.append_basic_block(current_fn, "fdivz.fail");
+    let ok_bb = ctx.context.append_basic_block(current_fn, "fdivz.ok");
+
+    let _ = ctx.builder.build_conditional_branch(is_zero, fail_bb, ok_bb);
+
+    ctx.builder.position_at_end(fail_bb);
+    call_panic(ctx, b"float division by zero", "fdivz");
+
     ctx.builder.position_at_end(ok_bb);
 }
 

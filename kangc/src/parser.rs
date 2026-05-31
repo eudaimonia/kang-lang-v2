@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::time::Instant;
 
+// 最大 token 数，防止恶意超大输入耗尽内存；1M tokens ≈ 50MB 源码，教学语言足够
 const MAX_TOKEN_COUNT: usize = 1_000_000;
 
 // 最大嵌套深度，防止恶意输入导致栈溢出
@@ -47,16 +48,23 @@ impl<'a> Parser<'a> {
     // ── 基本操作 ─────────────────────────────────────────────────────────
 
     fn peek(&self) -> &Token {
-        &self.tokens[self.pos]
+        debug_assert!(self.pos < self.tokens.len(), "peek 超出 token 流边界");
+        // 防御: pos 不应越界，但若越界则返回 EOF 避免 panic
+        if self.pos < self.tokens.len() {
+            &self.tokens[self.pos]
+        } else {
+            &self.tokens[self.tokens.len() - 1]
+        }
     }
 
     fn peek_kind(&self) -> &TokenKind {
-        &self.tokens[self.pos].kind
+        &self.peek().kind
     }
 
     fn advance(&mut self) -> &Token {
         let t = &self.tokens[self.pos];
-        self.pos += 1;
+        // 防止越过 EOF 导致 peek panic
+        self.pos = (self.pos + 1).min(self.tokens.len() - 1);
         t
     }
 
@@ -96,6 +104,7 @@ impl<'a> Parser<'a> {
             line: t.line,
             col: t.col,
             span: t.span.clone(),
+            is_incomplete: matches!(t.kind, TokenKind::Eof),
         }
     }
 
@@ -566,9 +575,10 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RParen)?;
         self.expect(&TokenKind::Arrow)?;
         let return_type = self.parse_return_type()?;
+        // parse_block 始终返回 Stmt::Block
         let body = match self.parse_block()? {
             Stmt::Block(stmts, ..) => stmts,
-            _ => unreachable!(),
+            _ => unreachable!("parse_block 始终返回 Stmt::Block"),
         };
         Ok(FuncDef { name, params, return_type, body })
     }
@@ -639,6 +649,7 @@ fn expr_to_lvalue(expr: Expr, mark: usize, tokens: &[Token]) -> Result<LValue, P
                 line: t.line,
                 col: t.col,
                 span: t.span.clone(),
+                is_incomplete: false,
             })
         }
     }
@@ -810,6 +821,7 @@ pub fn parse(tokens: &[Token], stats: &mut ParseStats) -> Result<Program, ParseE
             line: 0,
             col: 0,
             span: 0..0,
+            is_incomplete: false,
         });
     }
     let start = Instant::now();
@@ -824,6 +836,113 @@ pub fn parse(tokens: &[Token], stats: &mut ParseStats) -> Result<Program, ParseE
     stats.struct_count = program.items.iter().filter(|i| matches!(i, TopLevel::Struct(_))).count();
 
     Ok(program)
+}
+
+// ── REPL 行解析 ───────────────────────────────────────────────────────────────
+
+/// REPL 单行解析结果：声明、语句、或裸表达式
+#[derive(Debug, Clone)]
+pub enum LineResult {
+    FuncDef(FuncDef),
+    StructDef(StructDef),
+    Stmt(Stmt),
+    /// 裸表达式 — REPL 求值后打印结果
+    Expr(Expr),
+}
+
+/// 解析单个语句（期望消耗完所有 token）
+pub fn parse_stmt(tokens: &[Token]) -> Result<Stmt, ParseError> {
+    let mut parser = Parser::new(tokens);
+    let stmt = parser.parse_stmt()?;
+    if parser.peek_kind() != &TokenKind::Eof {
+        return Err(parser.error("语句后有额外输入".to_string()));
+    }
+    Ok(stmt)
+}
+
+/// 解析单个表达式（期望消耗完所有 token）
+pub fn parse_expr(tokens: &[Token]) -> Result<Expr, ParseError> {
+    let mut parser = Parser::new(tokens);
+    let expr = parser.parse_expr()?;
+    if parser.peek_kind() != &TokenKind::Eof {
+        return Err(parser.error("表达式后有额外输入".to_string()));
+    }
+    Ok(expr)
+}
+
+/// REPL 行解析：智能判断输入类型
+/// - def/struct → 顶层声明
+/// - var/return/if/for/{ → 语句
+/// - 表达式后跟 = → 赋值语句
+/// - 表达式后跟 ; → 表达式语句
+/// - 表达式后跟 EOF → 裸表达式（REPL 求值并打印）
+pub fn parse_line(tokens: &[Token]) -> Result<LineResult, ParseError> {
+    if tokens.len() > MAX_TOKEN_COUNT {
+        return Err(ParseError {
+            msg: format!("token 数量 {} 超过限制 {}", tokens.len(), MAX_TOKEN_COUNT),
+            line: 0,
+            col: 0,
+            span: 0..0,
+            is_incomplete: false,
+        });
+    }
+
+    // 空输入 → 继续等待
+    if tokens.len() <= 1 {
+        return Err(ParseError {
+            msg: "空输入".to_string(),
+            line: 0,
+            col: 0,
+            span: 0..0,
+            is_incomplete: true,
+        });
+    }
+
+    let mut parser = Parser::new(tokens);
+
+    // def / struct 声明
+    match parser.peek_kind() {
+        TokenKind::Def => {
+            return Ok(LineResult::FuncDef(parser.parse_func_def()?));
+        }
+        TokenKind::Struct => {
+            return Ok(LineResult::StructDef(parser.parse_struct_def()?));
+        }
+        TokenKind::Var | TokenKind::Return | TokenKind::If |
+        TokenKind::For | TokenKind::LBrace => {
+            return Ok(LineResult::Stmt(parser.parse_stmt()?));
+        }
+        _ => {}
+    }
+
+    // 表达式 → 根据后续 token 判断语义
+    let expr_start = parser.pos;
+    let expr = parser.parse_expr()?;
+
+    match parser.peek_kind() {
+        TokenKind::Assign => {
+            parser.advance();
+            let value = parser.parse_expr()?;
+            parser.expect(&TokenKind::Semi)?;
+            let lvalue = expr_to_lvalue(expr, expr_start, parser.tokens)?;
+            Ok(LineResult::Stmt(Stmt::Assign {
+                lvalue,
+                value: Box::new(value),
+                span: parser.current_span(),
+            }))
+        }
+        TokenKind::Semi => {
+            parser.advance();
+            Ok(LineResult::Stmt(Stmt::Expr(Box::new(expr), parser.current_span())))
+        }
+        TokenKind::Eof => {
+            Ok(LineResult::Expr(expr))
+        }
+        _ => Err(parser.error(format!(
+            "期望 ; = 或表达式结束，但得到 {:?}",
+            parser.peek_kind()
+        ))),
+    }
 }
 
 // ── 单元测试 ────────────────────────────────────────────────────────────────
@@ -1609,5 +1728,67 @@ mod tests {
         };
         parse(&tokens, &mut stats).unwrap();
         assert!(stats.ast_max_depth >= 5); // program → func-def → block → block → block → return
+    }
+
+    // ── parse_line 测试 ──────────────────────────────────────────────────
+
+    /// 辅助: 源码 → parse_line 结果
+    fn parse_line_source(source: &str) -> Result<LineResult, ParseError> {
+        let mut lex_stats = LexStats {
+            duration_us: 0, token_count: 0,
+            token_counts_by_kind: HashMap::new(), comment_bytes: 0,
+        };
+        let tokens = lexer::tokenize(source, &mut lex_stats).unwrap();
+        parse_line(&tokens)
+    }
+
+    #[test]
+    fn repl_expr_int_lit() {
+        let r = parse_line_source("42").unwrap();
+        assert!(matches!(r, LineResult::Expr(_)));
+    }
+
+    #[test]
+    fn repl_expr_binary_add() {
+        let r = parse_line_source("1 + 2").unwrap();
+        assert!(matches!(r, LineResult::Expr(_)));
+    }
+
+    #[test]
+    fn repl_expr_call() {
+        let r = parse_line_source("puts(\"hello\")").unwrap();
+        assert!(matches!(r, LineResult::Expr(_)));
+    }
+
+    #[test]
+    fn repl_stmt_let() {
+        let r = parse_line_source("var x:i32 = 5;").unwrap();
+        assert!(matches!(r, LineResult::Stmt(_)));
+    }
+
+    #[test]
+    fn repl_stmt_assign() {
+        let r = parse_line_source("x = 10;").unwrap();
+        assert!(matches!(r, LineResult::Stmt(_)));
+    }
+
+    #[test]
+    fn repl_expr_with_semi_is_stmt() {
+        let r = parse_line_source("1 + 2;").unwrap();
+        assert!(matches!(r, LineResult::Stmt(_)));
+    }
+
+    #[test]
+    fn repl_incomplete_if() {
+        let r = parse_line_source("if true then");
+        assert!(r.is_err());
+        assert!(r.unwrap_err().is_incomplete);
+    }
+
+    #[test]
+    fn repl_incomplete_var() {
+        let r = parse_line_source("var x");
+        assert!(r.is_err());
+        assert!(r.unwrap_err().is_incomplete);
     }
 }

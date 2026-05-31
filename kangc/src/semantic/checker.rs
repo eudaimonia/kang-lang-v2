@@ -42,6 +42,16 @@ impl Checker {
     pub fn failures(&self) -> usize { self.failures }
     pub fn symbol_count(&self) -> usize { self.symbols.symbol_count }
 
+    /// 清空累积的错误列表（REPL 每次输入前调用）
+    pub fn clear_errors(&mut self) {
+        self.errors.clear();
+    }
+
+    /// 取出累积的错误并清空
+    pub fn take_errors(&mut self) -> Vec<SemanticError> {
+        std::mem::take(&mut self.errors)
+    }
+
     // ── 入口: 两遍扫描 ─────────────────────────────────────────────────────
 
     pub fn check_program(
@@ -90,7 +100,7 @@ impl Checker {
     // ST1: 字段不能是 void
     // ST2: 禁止直接自引用（允许 [Self] 间接引用）
     // ST5: 结构体类型必须在使用前定义（由两遍扫描自然保证，struct 在 pass1 注册）
-    fn check_struct_decl(&mut self, s: &ast::StructDef) {
+    pub fn check_struct_decl(&mut self, s: &ast::StructDef) {
         let mut fields = Vec::new();
         for (name, ty) in &s.fields {
             let kt = KangType::from_ast_type(ty);
@@ -119,15 +129,17 @@ impl Checker {
         self.structs.insert(s.name.clone(), info.clone());
 
         // 注册为类型符号
-        let _ = self.symbols.insert(
+        if let Err(e) = self.symbols.insert(
             &s.name,
             SymbolKind::Struct(info),
             ScopeHint::Normal,
-        );
+        ) {
+            self.error(&e, &s.name, 0..0);
+        }
     }
 
     // F3: 禁止用户函数重载（同名函数只能定义一个）
-    fn register_func_decl(&mut self, f: &ast::FuncDef) {
+    pub fn register_func_decl(&mut self, f: &ast::FuncDef) {
         let ret = KangType::from_ast_return_type(&f.return_type);
         let params: Vec<(String, KangType)> = f
             .params
@@ -157,16 +169,18 @@ impl Checker {
             is_builtin: false,
             overloads: vec![],
         };
-        let _ = self.symbols.insert(
+        if let Err(e) = self.symbols.insert(
             &f.name,
             SymbolKind::Function(sig),
             ScopeHint::Normal,
-        );
+        ) {
+            self.error(&e, &f.name, 0..0);
+        }
     }
 
     // ── 第二遍: 函数体检查 ─────────────────────────────────────────────────
 
-    fn check_func_def(&mut self, func: &ast::FuncDef) -> TypedFuncDef {
+    pub fn check_func_def(&mut self, func: &ast::FuncDef) -> TypedFuncDef {
         self.current_func_name = func.name.clone();
         self.current_func_return = KangType::from_ast_return_type(&func.return_type);
 
@@ -216,7 +230,7 @@ impl Checker {
         typed_stmts
     }
 
-    fn check_stmt(&mut self, s: &ast::Stmt) -> TypedStmt {
+    pub fn check_stmt(&mut self, s: &ast::Stmt) -> TypedStmt {
         match s {
             ast::Stmt::VarDecl { bindings, init, .. } => self.check_var_decl(bindings, init),
             ast::Stmt::Assign { lvalue, value, .. } => self.check_assign(lvalue, value),
@@ -323,12 +337,13 @@ impl Checker {
                                 &format!("变量 \"{}\" 与函数同名，命名空间冲突 (S4)", name),
                                 name,
                             span_of_expr(init));
+                        } else {
+                            let _ = self.symbols.insert(
+                                name,
+                                SymbolKind::Variable(kt.clone()),
+                                ScopeHint::Normal,
+                            );
                         }
-                        let _ = self.symbols.insert(
-                            name,
-                            SymbolKind::Variable(kt.clone()),
-                            ScopeHint::Normal,
-                        );
                     } else {
                         let _ = self.symbols.insert(
                             name,
@@ -614,7 +629,7 @@ impl Checker {
     // ── 表达式类型推导 ─────────────────────────────────────────────────────
 
     /// 检查表达式，可选的 expected_type 用于上下文类型推断（如空数组 []）
-    fn check_expr(&mut self, expr: &ast::Expr, expected_type: Option<KangType>) -> TypedExpr {
+    pub fn check_expr(&mut self, expr: &ast::Expr, expected_type: Option<KangType>) -> TypedExpr {
         match expr {
             ast::Expr::IntLit(v, ..) => self.typed_lit(TypedExprKind::IntLit(v.clone()), KangType::I32),
             ast::Expr::FloatLit(v, ..) => {
@@ -644,15 +659,15 @@ impl Checker {
     fn check_ident(&mut self, name: &str, span: Range<usize>) -> TypedExpr {
         // 先提取数据，避免 borrow checker 冲突
         let lookup_result = self.symbols.lookup(name).map(|e| {
-            (match &e.kind {
+            match &e.kind {
                 SymbolKind::Variable(kt) => ("var", kt.clone(), e.hint.clone()),
                 SymbolKind::Function(_) => ("func", KangType::Void, ScopeHint::Normal),
                 _ => ("other", KangType::I32, ScopeHint::Normal),
-            }, e.hint.clone())
+            }
         });
 
         match lookup_result {
-            Some((("var", kt, hint), _entry_hint)) => {
+            Some(("var", kt, hint)) => {
                 // M5: _ 不可作变量使用
                 if name == "_" {
                     self.error("_ 是占位符，不能在表达式中使用 (M5)", name, span);
@@ -674,7 +689,7 @@ impl Checker {
                     ty: kt,
                 }
             }
-            Some((("func", _, _), _)) => {
+            Some(("func", _, _)) => {
                 // Kang 不支持一等函数，函数名不可作值使用
                 self.error(&format!("函数 \"{}\" 不能作为值引用，Kang 不支持一等函数", name), name, span);
                 TypedExpr {

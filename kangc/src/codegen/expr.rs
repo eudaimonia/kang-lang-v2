@@ -5,7 +5,7 @@ use super::runtime;
 use crate::ast;
 use crate::error::CodeGenError;
 use crate::semantic::{KangType, TypedExpr, TypedExprKind};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, IntValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FloatValue, IntValue};
 use inkwell::AddressSpace;
 
 type Result<T> = std::result::Result<T, CodeGenError>;
@@ -32,16 +32,17 @@ pub fn codegen_expr<'ctx>(
 }
 
 // Builder 操作仅当无 insert point 时失败，编译器保证始终有位置
-fn ok<T>(r: std::result::Result<T, inkwell::builder::BuilderError>) -> T {
-    r.unwrap()
+// 若失败则返回 CodeGenError 而非 panic（防御性编程）
+fn ok<T>(r: std::result::Result<T, inkwell::builder::BuilderError>) -> Result<T> {
+    r.map_err(|e| CodeGenError { msg: format!("LLVM builder error: {}", e) })
 }
 
 /// 从 CallSiteValue 中提取 BasicValueEnum（非 void 调用）
-fn call_val<'ctx>(call: inkwell::values::CallSiteValue<'ctx>) -> BasicValueEnum<'ctx> {
+fn call_val<'ctx>(call: inkwell::values::CallSiteValue<'ctx>) -> Result<BasicValueEnum<'ctx>> {
     use inkwell::values::ValueKind;
     match call.try_as_basic_value() {
-        ValueKind::Basic(bv) => bv,
-        _ => panic!("expected basic value from call"),
+        ValueKind::Basic(bv) => Ok(bv),
+        _ => Err(CodeGenError { msg: "期望函数返回值，但得到 void".into() }),
     }
 }
 
@@ -49,6 +50,9 @@ fn call_val<'ctx>(call: inkwell::values::CallSiteValue<'ctx>) -> BasicValueEnum<
 
 fn codegen_int_lit<'ctx>(ctx: &CodeGenContext<'ctx>, s: &str) -> Result<BasicValueEnum<'ctx>> {
     let val: i64 = s.parse().map_err(|_| CodeGenError { msg: format!("无效整数: {}", s) })?;
+    if val < i32::MIN as i64 || val > i32::MAX as i64 {
+        return Err(CodeGenError { msg: format!("整数超出 i32 范围: {}", s) });
+    }
     Ok(ctx.context.i32_type().const_int(val as u64, true).into())
 }
 
@@ -74,13 +78,13 @@ fn codegen_str_lit<'ctx>(ctx: &mut CodeGenContext<'ctx>, s: &str) -> Result<Basi
         ptr,
         ctx.context.ptr_type(AddressSpace::default()),
         "str.ptr",
-    ));
+    ))?;
 
     let len_val = ctx.context.i32_type().const_int(len as u64, true);
     let kstr_type = ctx.kang_type_to_basic(&KangType::Str).into_struct_type();
     let undef = kstr_type.const_zero();
-    let s1 = ok(ctx.builder.build_insert_value(undef, ptr_cast, 0, "str.packed.ptr")).into_struct_value();
-    let s2 = ok(ctx.builder.build_insert_value(s1, len_val, 1, "str.packed")).into_struct_value();
+    let s1 = ok(ctx.builder.build_insert_value(undef, ptr_cast, 0, "str.packed.ptr"))?.into_struct_value();
+    let s2 = ok(ctx.builder.build_insert_value(s1, len_val, 1, "str.packed"))?.into_struct_value();
     Ok(s2.into())
 }
 
@@ -93,7 +97,7 @@ fn codegen_ident<'ctx>(ctx: &mut CodeGenContext<'ctx>, name: &str) -> Result<Bas
         .lookup_var(name)
         .ok_or_else(|| CodeGenError { msg: format!("未定义变量: {}", name) })?;
     let llvm_ty = ctx.kang_type_to_basic(&ty);
-    Ok(ok(ctx.builder.build_load(llvm_ty, ptr, name)))
+    Ok(ok(ctx.builder.build_load(llvm_ty, ptr, name))?)
 }
 
 // ── 二元运算 ───────────────────────────────────────────────────────────────
@@ -131,14 +135,14 @@ fn codegen_binary<'ctx>(
         ast::BinOp::Gt => codegen_cmp(ctx, lhs, rhs, inkwell::IntPredicate::SGT, inkwell::FloatPredicate::OGT),
         ast::BinOp::Ge => codegen_cmp(ctx, lhs, rhs, inkwell::IntPredicate::SGE, inkwell::FloatPredicate::OGE),
         ast::BinOp::And => {
-            let l_bool = ok(ctx.builder.build_int_compare(inkwell::IntPredicate::NE, lhs.into_int_value(), ctx.context.bool_type().const_zero(), "and.l"));
-            let r_bool = ok(ctx.builder.build_int_compare(inkwell::IntPredicate::NE, rhs.into_int_value(), ctx.context.bool_type().const_zero(), "and.r"));
-            Ok(ok(ctx.builder.build_and(l_bool, r_bool, "and")).into())
+            let l_bool = ok(ctx.builder.build_int_compare(inkwell::IntPredicate::NE, lhs.into_int_value(), ctx.context.bool_type().const_zero(), "and.l"))?;
+            let r_bool = ok(ctx.builder.build_int_compare(inkwell::IntPredicate::NE, rhs.into_int_value(), ctx.context.bool_type().const_zero(), "and.r"))?;
+            Ok(ok(ctx.builder.build_and(l_bool, r_bool, "and"))?.into())
         }
         ast::BinOp::Or => {
-            let l_bool = ok(ctx.builder.build_int_compare(inkwell::IntPredicate::NE, lhs.into_int_value(), ctx.context.bool_type().const_zero(), "or.l"));
-            let r_bool = ok(ctx.builder.build_int_compare(inkwell::IntPredicate::NE, rhs.into_int_value(), ctx.context.bool_type().const_zero(), "or.r"));
-            Ok(ok(ctx.builder.build_or(l_bool, r_bool, "or")).into())
+            let l_bool = ok(ctx.builder.build_int_compare(inkwell::IntPredicate::NE, lhs.into_int_value(), ctx.context.bool_type().const_zero(), "or.l"))?;
+            let r_bool = ok(ctx.builder.build_int_compare(inkwell::IntPredicate::NE, rhs.into_int_value(), ctx.context.bool_type().const_zero(), "or.r"))?;
+            Ok(ok(ctx.builder.build_or(l_bool, r_bool, "or"))?.into())
         }
     }
 }
@@ -151,12 +155,12 @@ fn codegen_arith<'ctx, FI, FF>(
     float_op: FF,
 ) -> Result<BasicValueEnum<'ctx>>
 where
-    FI: FnOnce(&inkwell::builder::Builder<'ctx>, IntValue<'ctx>, IntValue<'ctx>) -> IntValue<'ctx>,
-    FF: FnOnce(&inkwell::builder::Builder<'ctx>, inkwell::values::FloatValue<'ctx>, inkwell::values::FloatValue<'ctx>) -> inkwell::values::FloatValue<'ctx>,
+    FI: FnOnce(&inkwell::builder::Builder<'ctx>, IntValue<'ctx>, IntValue<'ctx>) -> Result<IntValue<'ctx>>,
+    FF: FnOnce(&inkwell::builder::Builder<'ctx>, FloatValue<'ctx>, FloatValue<'ctx>) -> Result<FloatValue<'ctx>>,
 {
     match lhs {
-        BasicValueEnum::IntValue(l) => Ok(int_op(&ctx.builder, l, rhs.into_int_value()).into()),
-        BasicValueEnum::FloatValue(l) => Ok(float_op(&ctx.builder, l, rhs.into_float_value()).into()),
+        BasicValueEnum::IntValue(l) => Ok(int_op(&ctx.builder, l, rhs.into_int_value())?.into()),
+        BasicValueEnum::FloatValue(l) => Ok(float_op(&ctx.builder, l, rhs.into_float_value())?.into()),
         _ => Err(CodeGenError { msg: "算术运算仅支持 i32/f64".into() }),
     }
 }
@@ -173,9 +177,13 @@ fn codegen_div<'ctx>(
             runtime::insert_div_zero_check(ctx, r);
             // R4: INT_MIN / -1 溢出检查
             runtime::insert_int_min_check(ctx, l, r);
-            Ok(ok(ctx.builder.build_int_signed_div(l, r, "div")).into())
+            Ok(ok(ctx.builder.build_int_signed_div(l, r, "div"))?.into())
         }
-        BasicValueEnum::FloatValue(l) => Ok(ok(ctx.builder.build_float_div(l, rhs.into_float_value(), "div")).into()),
+        BasicValueEnum::FloatValue(l) => {
+            let r = rhs.into_float_value();
+            runtime::insert_float_div_zero_check(ctx, r);
+            Ok(ok(ctx.builder.build_float_div(l, r, "div"))?.into())
+        }
         _ => Err(CodeGenError { msg: "除法仅支持 i32/f64".into() }),
     }
 }
@@ -188,8 +196,8 @@ fn codegen_cmp<'ctx>(
     float_pred: inkwell::FloatPredicate,
 ) -> Result<BasicValueEnum<'ctx>> {
     match lhs {
-        BasicValueEnum::IntValue(l) => Ok(ok(ctx.builder.build_int_compare(int_pred, l, rhs.into_int_value(), "cmp")).into()),
-        BasicValueEnum::FloatValue(l) => Ok(ok(ctx.builder.build_float_compare(float_pred, l, rhs.into_float_value(), "cmp")).into()),
+        BasicValueEnum::IntValue(l) => Ok(ok(ctx.builder.build_int_compare(int_pred, l, rhs.into_int_value(), "cmp"))?.into()),
+        BasicValueEnum::FloatValue(l) => Ok(ok(ctx.builder.build_float_compare(float_pred, l, rhs.into_float_value(), "cmp"))?.into()),
         _ => Err(CodeGenError { msg: "比较运算仅支持 i32/f64".into() }),
     }
 }
@@ -205,15 +213,16 @@ fn codegen_str_eq<'ctx>(
     let lhs_s = lhs.into_struct_value();
     let rhs_s = rhs.into_struct_value();
 
-    let l_len = ok(ctx.builder.build_extract_value(lhs_s, 1, "str.eq.l.len")).into_int_value();
-    let r_len = ok(ctx.builder.build_extract_value(rhs_s, 1, "str.eq.r.len")).into_int_value();
+    let l_len = ok(ctx.builder.build_extract_value(lhs_s, 1, "str.eq.l.len"))?.into_int_value();
+    let r_len = ok(ctx.builder.build_extract_value(rhs_s, 1, "str.eq.r.len"))?.into_int_value();
 
     let len_eq = ok(ctx.builder.build_int_compare(
         inkwell::IntPredicate::EQ, l_len, r_len, "str.eq.len",
-    ));
+    ))?;
 
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i32_ty = ctx.context.i32_type();
+    // memcmp 来自 libc，不链接 libc 的目标需在 kangrt 中自行实现
     let memcmp = ctx.module.get_function("memcmp").unwrap_or_else(|| {
         let fn_type = i32_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i32_ty.into()], false);
         ctx.module.add_function("memcmp", fn_type, None)
@@ -228,23 +237,23 @@ fn codegen_str_eq<'ctx>(
 
     // 长度相等: 用 memcmp 比较内容
     ctx.builder.position_at_end(cmp_bb);
-    let l_ptr = ok(ctx.builder.build_extract_value(lhs_s, 0, "str.eq.l.ptr")).into_pointer_value();
-    let r_ptr = ok(ctx.builder.build_extract_value(rhs_s, 0, "str.eq.r.ptr")).into_pointer_value();
-    let l_cast = ok(ctx.builder.build_pointer_cast(l_ptr, ptr_ty, "l.cast"));
-    let r_cast = ok(ctx.builder.build_pointer_cast(r_ptr, ptr_ty, "r.cast"));
-    let cmp = ok(ctx.builder.build_call(memcmp, &[l_cast.into(), r_cast.into(), l_len.into()], "memcmp"));
-    let cmp_val = call_val(cmp).into_int_value();
+    let l_ptr = ok(ctx.builder.build_extract_value(lhs_s, 0, "str.eq.l.ptr"))?.into_pointer_value();
+    let r_ptr = ok(ctx.builder.build_extract_value(rhs_s, 0, "str.eq.r.ptr"))?.into_pointer_value();
+    let l_cast = ok(ctx.builder.build_pointer_cast(l_ptr, ptr_ty, "l.cast"))?;
+    let r_cast = ok(ctx.builder.build_pointer_cast(r_ptr, ptr_ty, "r.cast"))?;
+    let cmp = ok(ctx.builder.build_call(memcmp, &[l_cast.into(), r_cast.into(), l_len.into()], "memcmp"))?;
+    let cmp_val = call_val(cmp)?.into_int_value();
     let cmp_zero = ok(ctx.builder.build_int_compare(
         inkwell::IntPredicate::EQ,
         cmp_val,
         ctx.context.i32_type().const_zero(),
         "str.eq.cmpz",
-    ));
+    ))?;
     let _ = ctx.builder.build_unconditional_branch(merge_bb);
 
     // 合并
     ctx.builder.position_at_end(merge_bb);
-    let phi = ok(ctx.builder.build_phi(ctx.context.bool_type(), "str.eq.result"));
+    let phi = ok(ctx.builder.build_phi(ctx.context.bool_type(), "str.eq.result"))?;
     let false_val = ctx.context.bool_type().const_zero();
     phi.add_incoming(&[(&false_val, entry_bb), (&cmp_zero, cmp_bb)]);
 
@@ -254,7 +263,7 @@ fn codegen_str_eq<'ctx>(
             result.into_int_value(),
             ctx.context.bool_type().const_int(1, false),
             "str.ne",
-        )).into())
+        ))?.into())
     } else {
         Ok(result.into())
     }
@@ -271,23 +280,23 @@ fn codegen_str_concat<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>> {
     let lhs = codegen_expr(ctx, left)?;
     let rhs = codegen_expr(ctx, right)?;
-    let lhs_str = convert_to_str(ctx, lhs, &left.ty);
-    let rhs_str = convert_to_str(ctx, rhs, &right.ty);
+    let lhs_str = convert_to_str(ctx, lhs, &left.ty)?;
+    let rhs_str = convert_to_str(ctx, rhs, &right.ty)?;
 
     let lhs_s = lhs_str.into_struct_value();
     let rhs_s = rhs_str.into_struct_value();
-    let l_ptr = ok(ctx.builder.build_extract_value(lhs_s, 0, "l.ptr"));
-    let l_len = ok(ctx.builder.build_extract_value(lhs_s, 1, "l.len"));
-    let r_ptr = ok(ctx.builder.build_extract_value(rhs_s, 0, "r.ptr"));
-    let r_len = ok(ctx.builder.build_extract_value(rhs_s, 1, "r.len"));
+    let l_ptr = ok(ctx.builder.build_extract_value(lhs_s, 0, "l.ptr"))?;
+    let l_len = ok(ctx.builder.build_extract_value(lhs_s, 1, "l.len"))?;
+    let r_ptr = ok(ctx.builder.build_extract_value(rhs_s, 0, "r.ptr"))?;
+    let r_len = ok(ctx.builder.build_extract_value(rhs_s, 1, "r.len"))?;
 
     let func = ctx.module.get_function("k_str_concat")
         .ok_or_else(|| CodeGenError { msg: "k_str_concat 未声明".into() })?;
     let call = ok(ctx.builder.build_call(func, &[
         l_ptr.into(), l_len.into_int_value().into(),
         r_ptr.into(), r_len.into_int_value().into(),
-    ], "concat"));
-    Ok(call_val(call))
+    ], "concat"))?;
+    call_val(call)
 }
 
 /// 将非 str 值转为 str（调用内置 str() 函数）
@@ -295,23 +304,26 @@ fn convert_to_str<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     val: BasicValueEnum<'ctx>,
     ty: &KangType,
-) -> BasicValueEnum<'ctx> {
+) -> Result<BasicValueEnum<'ctx>> {
     match ty {
-        KangType::Str => val,
+        KangType::Str => Ok(val),
         KangType::I32 => {
-            let func = ctx.module.get_function("k_str_i32").unwrap();
-            call_val(ok(ctx.builder.build_call(func, &[val.into_int_value().into()], "to.str")))
+            let func = ctx.module.get_function("k_str_i32")
+                .ok_or_else(|| CodeGenError { msg: "k_str_i32 未声明".into() })?;
+            call_val(ok(ctx.builder.build_call(func, &[val.into_int_value().into()], "to.str"))?)
         }
         KangType::F64 => {
-            let func = ctx.module.get_function("k_str_f64").unwrap();
-            call_val(ok(ctx.builder.build_call(func, &[val.into_float_value().into()], "to.str")))
+            let func = ctx.module.get_function("k_str_f64")
+                .ok_or_else(|| CodeGenError { msg: "k_str_f64 未声明".into() })?;
+            call_val(ok(ctx.builder.build_call(func, &[val.into_float_value().into()], "to.str"))?)
         }
         KangType::Bool => {
-            let func = ctx.module.get_function("k_str_bool").unwrap();
-            let i32_val = ok(ctx.builder.build_int_z_extend(val.into_int_value(), ctx.context.i32_type(), "bool.i32"));
-            call_val(ok(ctx.builder.build_call(func, &[i32_val.into()], "to.str")))
+            let func = ctx.module.get_function("k_str_bool")
+                .ok_or_else(|| CodeGenError { msg: "k_str_bool 未声明".into() })?;
+            let i32_val = ok(ctx.builder.build_int_z_extend(val.into_int_value(), ctx.context.i32_type(), "bool.i32"))?;
+            call_val(ok(ctx.builder.build_call(func, &[i32_val.into()], "to.str"))?)
         }
-        _ => val,
+        _ => Ok(val),
     }
 }
 
@@ -325,13 +337,13 @@ fn codegen_unary<'ctx>(
     let val = codegen_expr(ctx, expr)?;
     match op {
         ast::UnaryOp::Neg => match val {
-            BasicValueEnum::IntValue(v) => Ok(ok(ctx.builder.build_int_neg(v, "neg")).into()),
-            BasicValueEnum::FloatValue(v) => Ok(ok(ctx.builder.build_float_neg(v, "neg")).into()),
+            BasicValueEnum::IntValue(v) => Ok(ok(ctx.builder.build_int_neg(v, "neg"))?.into()),
+            BasicValueEnum::FloatValue(v) => Ok(ok(ctx.builder.build_float_neg(v, "neg"))?.into()),
             _ => Err(CodeGenError { msg: "取负仅支持 i32/f64".into() }),
         },
         ast::UnaryOp::Not => Ok(ok(ctx.builder.build_int_compare(
             inkwell::IntPredicate::EQ, val.into_int_value(), ctx.context.bool_type().const_zero(), "not",
-        )).into()),
+        ))?.into()),
     }
 }
 
@@ -342,21 +354,21 @@ fn flatten_c_abi_args<'ctx>(
     ctx: &CodeGenContext<'ctx>,
     arg_values: &[BasicValueEnum<'ctx>],
     args: &[TypedExpr],
-) -> Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> {
+) -> Result<Vec<inkwell::values::BasicMetadataValueEnum<'ctx>>> {
     let mut flat: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = Vec::new();
     for (val, arg) in arg_values.iter().zip(args) {
         match &arg.ty {
             KangType::Str | KangType::Array(_) => {
                 let sv = val.into_struct_value();
-                let ptr = ok(ctx.builder.build_extract_value(sv, 0, "arg.ptr"));
-                let len = ok(ctx.builder.build_extract_value(sv, 1, "arg.len"));
+                let ptr = ok(ctx.builder.build_extract_value(sv, 0, "arg.ptr"))?;
+                let len = ok(ctx.builder.build_extract_value(sv, 1, "arg.len"))?;
                 flat.push(ptr.into());
                 flat.push(len.into());
             }
             KangType::Pair(_, _) => {
                 // F6: Pair 作参数时取第一值
                 let sv = val.into_struct_value();
-                let v0 = ok(ctx.builder.build_extract_value(sv, 0, "arg.pair.0"));
+                let v0 = ok(ctx.builder.build_extract_value(sv, 0, "arg.pair.0"))?;
                 flat.push(v0.into());
             }
             _ => {
@@ -364,7 +376,7 @@ fn flatten_c_abi_args<'ctx>(
             }
         }
     }
-    flat
+    Ok(flat)
 }
 
 fn codegen_call<'ctx>(
@@ -391,20 +403,20 @@ fn codegen_call<'ctx>(
         .module
         .get_function(&resolved_name)
         .or_else(|| ctx.lookup_func(&resolved_name))
-        .unwrap_or_else(|| panic!("函数 {} 应在语义阶段已声明", resolved_name));
+        .ok_or_else(|| CodeGenError { msg: format!("函数 {} 未声明", resolved_name) })?;
 
     // C ABI 外部函数：将 Kang 复合类型展平为标量参数
     let llvm_args: Vec<BasicMetadataValueEnum> = if func.get_first_basic_block().is_none() {
-        flatten_c_abi_args(ctx, &arg_values, args)
+        flatten_c_abi_args(ctx, &arg_values, args)?
     } else {
         arg_values.iter().map(|v| (*v).into()).collect()
     };
 
-    let call = ok(ctx.builder.build_call(func, &llvm_args, "call"));
+    let call = ok(ctx.builder.build_call(func, &llvm_args, "call"))?;
     if return_ty.is_void() {
         Ok(ctx.context.i32_type().const_zero().into())
     } else {
-        Ok(call_val(call))
+        call_val(call)
     }
 }
 
@@ -453,7 +465,7 @@ fn codegen_builtin_len<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>> {
     let arg = codegen_expr(ctx, &args[0])?;
     let struct_val = arg.into_struct_value();
-    let len = ok(ctx.builder.build_extract_value(struct_val, 1, "len"));
+    let len = ok(ctx.builder.build_extract_value(struct_val, 1, "len"))?;
     Ok(len.into())
 }
 
@@ -466,38 +478,35 @@ fn codegen_builtin_push<'ctx>(
     let elem = codegen_expr(ctx, &args[1])?;
 
     let arr_struct = arr.into_struct_value();
-    let arr_ptr = ok(ctx.builder.build_extract_value(arr_struct, 0, "arr.ptr"));
-    let arr_len = ok(ctx.builder.build_extract_value(arr_struct, 1, "arr.len"));
+    let arr_ptr = ok(ctx.builder.build_extract_value(arr_struct, 0, "arr.ptr"))?;
+    let arr_len = ok(ctx.builder.build_extract_value(arr_struct, 1, "arr.len"))?;
 
     let elem_llvm_ty = ctx.kang_type_to_basic(&args[1].ty);
-    let alloca = ok(ctx.builder.build_alloca(elem_llvm_ty, "elem.alloca"));
+    let alloca = ok(ctx.builder.build_alloca(elem_llvm_ty, "elem.alloca"))?;
     let _ = ctx.builder.build_store(alloca, elem);
     let elem_ptr = ok(ctx.builder.build_pointer_cast(
         alloca,
         ctx.context.ptr_type(AddressSpace::default()),
         "elem.cast",
-    ));
+    ))?;
 
-    let elem_size = size_of_kang(&args[1].ty);
+    let elem_size = size_of_kang(ctx, &args[1].ty);
     let elem_size_val = ctx.context.i32_type().const_int(elem_size as u64, true);
 
-    let func = ctx.module.get_function("k_push").expect("k_push 应在初始化时声明");
+    let func = ctx.module.get_function("k_push")
+        .ok_or_else(|| CodeGenError { msg: "k_push 未声明".into() })?;
     let call = ok(ctx.builder.build_call(func, &[
         arr_ptr.into(),
         arr_len.into(),
         elem_ptr.into(),
         elem_size_val.into(),
-    ], "push"));
-    Ok(call_val(call))
+    ], "push"))?;
+    call_val(call)
 }
 
-pub fn size_of_kang(ty: &KangType) -> i32 {
-    match ty {
-        KangType::I32 | KangType::Bool => 4,
-        KangType::F64 => 8,
-        KangType::Str | KangType::Array(_) | KangType::Struct(_) | KangType::Pair(_, _) => 16,
-        KangType::Void => 0,
-    }
+// Kang 类型的 LLVM 存储大小（字节），用于数组元素偏移计算
+pub fn size_of_kang(ctx: &CodeGenContext, ty: &KangType) -> i32 {
+    ctx.size_of(ty) as i32
 }
 
 // ── 索引 ───────────────────────────────────────────────────────────────────
@@ -512,38 +521,38 @@ fn codegen_index<'ctx>(
     let idx_val = codegen_expr(ctx, index)?;
 
     let arr_struct = arr_val.into_struct_value();
-    let arr_ptr = ok(ctx.builder.build_extract_value(arr_struct, 0, "arr.ptr"));
-    let arr_len = ok(ctx.builder.build_extract_value(arr_struct, 1, "arr.len"));
+    let arr_ptr = ok(ctx.builder.build_extract_value(arr_struct, 0, "arr.ptr"))?;
+    let arr_len = ok(ctx.builder.build_extract_value(arr_struct, 1, "arr.len"))?;
     let idx = idx_val.into_int_value();
 
     // R1/R2: 数组/字符串索引越界检查
     runtime::insert_bounds_check(ctx, idx, arr_len.into_int_value());
 
-    let elem_size = size_of_kang(result_ty);
+    let elem_size = size_of_kang(ctx, result_ty);
     let offset = ok(ctx.builder.build_int_mul(
         idx,
         ctx.context.i32_type().const_int(elem_size as u64, true),
         "offset",
-    ));
+    ))?;
 
     // ptr_to_int: 指针转为整数做偏移计算
     let arr_addr = ok(ctx.builder.build_ptr_to_int(
         arr_ptr.into_pointer_value(),
         ctx.context.i32_type(),
         "arr.addr",
-    ));
+    ))?;
     let base_addr = ok(ctx.builder.build_int_add(
         arr_addr,
         ctx.context.i32_type().const_int(4u64, true),
         "base",
-    ));
-    let elem_addr = ok(ctx.builder.build_int_add(base_addr, offset, "elem.addr"));
+    ))?;
+    let elem_addr = ok(ctx.builder.build_int_add(base_addr, offset, "elem.addr"))?;
     let elem_ptr = ok(ctx.builder.build_int_to_ptr(
         elem_addr,
         ctx.context.ptr_type(AddressSpace::default()),
         "elem.ptr",
-    ));
-    Ok(ok(ctx.builder.build_load(ctx.kang_type_to_basic(result_ty), elem_ptr, "elem")))
+    ))?;
+    Ok(ok(ctx.builder.build_load(ctx.kang_type_to_basic(result_ty), elem_ptr, "elem"))?)
 }
 
 // ── 字段访问 ──────────────────────────────────────────────────────────────
@@ -570,7 +579,7 @@ fn codegen_field_access<'ctx>(
         .ok_or_else(|| CodeGenError { msg: format!("结构体 {} 无字段 {}", struct_name, field) })?;
 
     let struct_val = obj_val.into_struct_value();
-    let field_val = ok(ctx.builder.build_extract_value(struct_val, field_idx as u32, field));
+    let field_val = ok(ctx.builder.build_extract_value(struct_val, field_idx as u32, field))?;
     Ok(field_val.into())
 }
 
@@ -587,25 +596,17 @@ fn codegen_array_lit<'ctx>(
     };
 
     let elem_count = elems.len() as i32;
-    let elem_bytes = size_of_kang(elem_ty) as usize;
+    let elem_bytes = size_of_kang(ctx, elem_ty) as usize;
     let total_bytes = 4 + (elem_count as usize) * elem_bytes;
 
     let size_val = ctx.context.i32_type().const_int(total_bytes as u64, true);
     let align_val = ctx.context.i32_type().const_int(8u64, true);
 
-    let alloc_func = ctx.module.get_function("k_arena_alloc_aligned").unwrap_or_else(|| {
-        let _ptr_ty: inkwell::types::BasicMetadataTypeEnum =
-            ctx.context.ptr_type(AddressSpace::default()).into();
-        let i32_ty: inkwell::types::BasicMetadataTypeEnum = ctx.context.i32_type().into();
-        let fn_type = ctx
-            .context
-            .ptr_type(AddressSpace::default())
-            .fn_type(&[i32_ty, i32_ty], false);
-        ctx.module.add_function("k_arena_alloc_aligned", fn_type, None)
-    });
+    let alloc_func = ctx.module.get_function("k_arena_alloc_aligned")
+        .ok_or_else(|| CodeGenError { msg: "k_arena_alloc_aligned 未声明 — builtins::declare_all 可能未调用".into() })?;
 
-    let alloc_call = ok(ctx.builder.build_call(alloc_func, &[size_val.into(), align_val.into()], "arr.alloc"));
-    let raw_ptr = call_val(alloc_call).into_pointer_value();
+    let alloc_call = ok(ctx.builder.build_call(alloc_func, &[size_val.into(), align_val.into()], "arr.alloc"))?;
+    let raw_ptr = call_val(alloc_call)?.into_pointer_value();
 
     // 写入长度头
     let len_val = ctx.context.i32_type().const_int(elem_count as u64, true);
@@ -613,7 +614,7 @@ fn codegen_array_lit<'ctx>(
         raw_ptr,
         ctx.context.ptr_type(AddressSpace::default()),
         "len.ptr",
-    ));
+    ))?;
     let _ = ctx.builder.build_store(len_ptr, len_val);
 
     // 写入每个元素
@@ -621,26 +622,26 @@ fn codegen_array_lit<'ctx>(
         let elem_val = codegen_expr(ctx, elem)?;
         let offset = 4 + (i * elem_bytes);
         let offset_val = ctx.context.i64_type().const_int(offset as u64, false);
-        let raw_int = ok(ctx.builder.build_ptr_to_int(raw_ptr, ctx.context.i64_type(), "raw.int"));
-        let elem_int = ok(ctx.builder.build_int_add(raw_int, offset_val, "elem.offset"));
+        let raw_int = ok(ctx.builder.build_ptr_to_int(raw_ptr, ctx.context.i64_type(), "raw.int"))?;
+        let elem_int = ok(ctx.builder.build_int_add(raw_int, offset_val, "elem.offset"))?;
         let elem_ptr = ok(ctx.builder.build_int_to_ptr(
             elem_int,
             ctx.context.ptr_type(AddressSpace::default()),
             "elem.ptr",
-        ));
+        ))?;
         let typed_elem_ptr = ok(ctx.builder.build_pointer_cast(
             elem_ptr,
             ctx.context.ptr_type(AddressSpace::default()),
             "typed.elem",
-        ));
+        ))?;
         let _ = ctx.builder.build_store(typed_elem_ptr, elem_val);
     }
 
     let kptrlen_type = ctx.kang_type_to_basic(array_ty).into_struct_type();
     let count_val = ctx.context.i32_type().const_int(elem_count as u64, true);
     let undef = kptrlen_type.const_zero();
-    let s1 = ok(ctx.builder.build_insert_value(undef, raw_ptr, 0, "arr.packed.ptr")).into_struct_value();
-    let s2 = ok(ctx.builder.build_insert_value(s1, count_val, 1, "arr.packed")).into_struct_value();
+    let s1 = ok(ctx.builder.build_insert_value(undef, raw_ptr, 0, "arr.packed.ptr"))?.into_struct_value();
+    let s2 = ok(ctx.builder.build_insert_value(s1, count_val, 1, "arr.packed"))?.into_struct_value();
     Ok(s2.into())
 }
 
@@ -674,7 +675,7 @@ fn codegen_struct_lit<'ctx>(
 
     let mut packed = _struct_type.const_zero();
     for (i, val) in field_values.iter().enumerate() {
-        packed = ok(ctx.builder.build_insert_value(packed, *val, i as u32, &format!("struct.packed.{}", i))).into_struct_value();
+        packed = ok(ctx.builder.build_insert_value(packed, *val, i as u32, &format!("struct.packed.{}", i)))?.into_struct_value();
     }
     Ok(packed.into())
 }

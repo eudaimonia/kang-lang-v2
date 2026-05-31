@@ -153,25 +153,6 @@ pub enum Expr {
     Ident(String, Range<usize>),
 }
 
-impl Expr {
-    /// 优先级数字，用于需要时判断是否需要括号（当前 S-expr 输出未使用）
-    #[allow(dead_code)]
-    fn prec(&self) -> u8 {
-        match self {
-            Expr::Binary { op, .. } => match op {
-                BinOp::Or => 1,
-                BinOp::And => 2,
-                BinOp::Eq | BinOp::Neq => 3,
-                BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 4,
-                BinOp::Add | BinOp::Sub => 5,
-                BinOp::Mul | BinOp::Div => 6,
-            },
-            Expr::Unary { .. } => 7,
-            _ => 8, // postfix / primary
-        }
-    }
-}
-
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
