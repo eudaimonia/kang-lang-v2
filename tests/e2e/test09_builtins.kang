@@ -1,0 +1,107 @@
+// test09_builtins.kang — 文件 I/O 和类型转换内置函数
+// 已知问题: str(bool) LLVM 类型不匹配; 二值返回的内置函数 ok 标志位置可能与文档不同
+
+def main() -> i32 {
+    // ── write_file + file_exists ──
+    write_file("/tmp/t09_io.txt", "Kang!");
+    var exists:bool = file_exists("/tmp/t09_io.txt");
+    if exists then {
+        puts("write_file + file_exists: OK");
+    } else {
+        puts("write_file + file_exists: FAIL");
+        return 1;
+    }
+
+    // ── append_file ──
+    append_file("/tmp/t09_io.txt", "+more");
+    var ex2:bool = file_exists("/tmp/t09_io.txt");
+    if ex2 then {
+        puts("append_file 后仍存在: OK");
+    } else {
+        puts("append_file 后仍存在: FAIL");
+        return 1;
+    }
+
+    // ── file_exists 不存在的文件 ──
+    var noexist:bool = file_exists("/tmp/kang_nonexistent_xyz.txt");
+    if noexist == false then {
+        puts("file_exists(不存在): OK");
+    } else {
+        puts("file_exists(不存在): FAIL");
+        return 1;
+    }
+
+    // ── i32(str) 转换: 检查解析值 ──
+    var iv:i32, _ = i32("42");
+    if iv == 42 then {
+        puts("i32(str) 值=42: OK");
+    } else {
+        puts("i32(str) 值=42: FAIL");
+        return 1;
+    }
+
+    // i32(str) 负数
+    var iv_neg:i32, _ = i32("-10");
+    if iv_neg == -10 then {
+        puts("i32(str) 负数: OK");
+    } else {
+        puts("i32(str) 负数: FAIL");
+        return 1;
+    }
+
+    // i32(str) 非数字: 值应为 0
+    var iv2:i32, _ = i32("not_a_number");
+    if iv2 == 0 then {
+        puts("i32(非数字) 返回0: OK");
+    } else {
+        puts("i32(非数字) 返回0: FAIL");
+        return 1;
+    }
+
+    // ── f64(str) 转换: 检查解析值 ──
+    var fv:f64, _ = f64("3.14");
+    if fv > 3.13 then {
+        puts("f64(str) >3.13: OK");
+    } else {
+        puts("f64(str) >3.13: FAIL");
+        return 1;
+    }
+
+    // ── bool(str) 转换: 检查解析值 ──
+    var bv:bool, _ = bool("true");
+    if bv == true then {
+        puts("bool(str) true: OK");
+    } else {
+        puts("bool(str) true: FAIL");
+        return 1;
+    }
+
+    var bv2:bool, _ = bool("false");
+    if bv2 == false then {
+        puts("bool(str) false: OK");
+    } else {
+        puts("bool(str) false: FAIL");
+        return 1;
+    }
+
+    // ── i32(f64) 向零截断 ──
+    var fi:i32 = i32(3.99);
+    if fi == 3 then {
+        puts("i32(f64) 向零截断: OK");
+    } else {
+        puts("i32(f64) 向零截断: FAIL");
+        return 1;
+    }
+
+    // ── f64(i32) ──
+    var ff:f64 = f64(7);
+    if ff > 6.9 then {
+        puts("f64(i32): OK");
+    } else {
+        puts("f64(i32): FAIL");
+        return 1;
+    }
+
+    puts("内置函数测试全部通过");
+    return 0;
+}

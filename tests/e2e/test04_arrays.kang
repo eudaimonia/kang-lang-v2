@@ -1,0 +1,79 @@
+// test04_arrays.kang — 数组字面量、索引、len、元素赋值、遍历
+
+def main() -> i32 {
+    // 数组字面量
+    var arr:[i32] = [10, 20, 30, 40, 50];
+    var n:i32 = len(arr);
+    if n == 5 then {
+        puts("数组长度: OK");
+    } else {
+        puts("数组长度: FAIL");
+        return 1;
+    }
+
+    // 数组索引
+    if arr[0] == 10 then {
+        puts("arr[0]: OK");
+    } else {
+        puts("arr[0]: FAIL");
+        return 1;
+    }
+
+    if arr[4] == 50 then {
+        puts("arr[4]: OK");
+    } else {
+        puts("arr[4]: FAIL");
+        return 1;
+    }
+
+    // 数组元素赋值
+    arr[2] = 99;
+    if arr[2] == 99 then {
+        puts("数组元素赋值: OK");
+    } else {
+        puts("数组元素赋值: FAIL");
+        return 1;
+    }
+
+    // 遍历数组求和
+    var sum:i32 = 0;
+    for var i:i32 = 0, i < len(arr), i = i + 1 in {
+        sum = sum + arr[i];
+    }
+    // 10+20+99+40+50 = 219 (arr[2] 被改为 99, 没有 push)
+    if sum == 219 then {
+        puts("数组遍历求和: OK");
+    } else {
+        var msg:str = "数组遍历求和: FAIL, sum=" + str(sum);
+        puts(msg);
+        return 1;
+    }
+
+    // bool 数组
+    var flags:[bool] = [true, false, true];
+    if flags[0] == true then {
+        puts("bool 数组: OK");
+    } else {
+        puts("bool 数组: FAIL");
+        return 1;
+    }
+
+    if flags[1] == false then {
+        puts("bool 数组 false: OK");
+    } else {
+        puts("bool 数组 false: FAIL");
+        return 1;
+    }
+
+    // str 数组
+    var names:[str] = ["Alice", "Bob"];
+    if names[0] == "Alice" then {
+        puts("str 数组: OK");
+    } else {
+        puts("str 数组: FAIL");
+        return 1;
+    }
+
+    puts("数组测试全部通过");
+    return 0;
+}

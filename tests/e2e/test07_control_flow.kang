@@ -1,0 +1,137 @@
+// test07_control_flow.kang — if/else、循环、提前返回
+
+def abs(n:i32) -> i32 {
+    if n >= 0 then {
+        return n;
+    }
+    return -n;
+}
+
+def sign(n:i32) -> str {
+    if n > 0 then {
+        return "positive";
+    } else {
+        if n < 0 then {
+            return "negative";
+        }
+    }
+    return "zero";
+}
+
+def main() -> i32 {
+    // if/else
+    var x:i32 = 10;
+    if x > 5 then {
+        puts("if/then: OK");
+    } else {
+        puts("if/then: FAIL");
+        return 1;
+    }
+
+    if x < 0 then {
+        puts("false branch 误入: FAIL");
+        return 1;
+    } else {
+        puts("if/else: OK");
+    }
+
+    // abs 函数
+    if abs(5) == 5 then {
+        puts("abs(正): OK");
+    } else {
+        puts("abs(正): FAIL");
+        return 1;
+    }
+
+    if abs(-3) == 3 then {
+        puts("abs(负): OK");
+    } else {
+        puts("abs(负): FAIL");
+        return 1;
+    }
+
+    if abs(0) == 0 then {
+        puts("abs(零): OK");
+    } else {
+        puts("abs(零): FAIL");
+        return 1;
+    }
+
+    // sign 函数 (嵌套 if/else)
+    var s1:str = sign(100);
+    if s1 == "positive" then {
+        puts("sign(正): OK");
+    } else {
+        puts("sign(正): FAIL");
+        return 1;
+    }
+
+    var s2:str = sign(-1);
+    if s2 == "negative" then {
+        puts("sign(负): OK");
+    } else {
+        puts("sign(负): FAIL");
+        return 1;
+    }
+
+    var s3:str = sign(0);
+    if s3 == "zero" then {
+        puts("sign(零): OK");
+    } else {
+        puts("sign(零): FAIL");
+        return 1;
+    }
+
+    // for 循环: 累加
+    var sum:i32 = 0;
+    for var i:i32 = 1, i <= 10, i = i + 1 in {
+        sum = sum + i;
+    }
+    if sum == 55 then {
+        puts("for 1..10 累加: OK");
+    } else {
+        puts("for 1..10 累加: FAIL");
+        return 1;
+    }
+
+    // for 循环: 倒序
+    var count:i32 = 5;
+    for var j:i32 = 0, j < 5, j = j + 1 in {
+        count = count - 1;
+    }
+    if count == 0 then {
+        puts("for 倒序: OK");
+    } else {
+        puts("for 倒序: FAIL");
+        return 1;
+    }
+
+    // for 循环: 零次执行 (条件初始为 false)
+    var zero:i32 = 0;
+    for var k:i32 = 0, k < 0, k = k + 1 in {
+        zero = 1;
+    }
+    if zero == 0 then {
+        puts("for 零次执行: OK");
+    } else {
+        puts("for 零次执行: FAIL");
+        return 1;
+    }
+
+    // 提前返回
+    var found:bool = false;
+    for var idx:i32 = 0, idx < 10, idx = idx + 1 in {
+        if idx == 7 then {
+            found = true;
+        }
+    }
+    if found == true then {
+        puts("for 中找到: OK");
+    } else {
+        puts("for 中找到: FAIL");
+        return 1;
+    }
+
+    puts("控制流测试全部通过");
+    return 0;
+}

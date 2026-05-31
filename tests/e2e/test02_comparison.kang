@@ -1,0 +1,134 @@
+// test02_comparison.kang — 比较运算和逻辑运算
+
+def main() -> i32 {
+    // == 和 !=
+    if 5 == 5 then {
+        puts("i32 ==: OK");
+    } else {
+        puts("i32 ==: FAIL");
+        return 1;
+    }
+
+    if 3 != 7 then {
+        puts("i32 !=: OK");
+    } else {
+        puts("i32 !=: FAIL");
+        return 1;
+    }
+
+    // < <= > >=
+    if 1 < 10 then {
+        puts("i32 <: OK");
+    } else {
+        puts("i32 <: FAIL");
+        return 1;
+    }
+
+    if 5 <= 5 then {
+        puts("i32 <=: OK");
+    } else {
+        puts("i32 <=: FAIL");
+        return 1;
+    }
+
+    if 100 > 1 then {
+        puts("i32 >: OK");
+    } else {
+        puts("i32 >: FAIL");
+        return 1;
+    }
+
+    if 0 >= 0 then {
+        puts("i32 >=: OK");
+    } else {
+        puts("i32 >=: FAIL");
+        return 1;
+    }
+
+    // && (and)
+    if true && true then {
+        puts("&& true-true: OK");
+    } else {
+        puts("&& true-true: FAIL");
+        return 1;
+    }
+
+    if true && false then {
+        puts("&& true-false 应该是 false: FAIL");
+        return 1;
+    } else {
+        puts("&& true-false: OK");
+    }
+
+    // || (or)
+    if false || true then {
+        puts("|| false-true: OK");
+    } else {
+        puts("|| false-true: FAIL");
+        return 1;
+    }
+
+    if false || false then {
+        puts("|| false-false 应该是 false: FAIL");
+        return 1;
+    } else {
+        puts("|| false-false: OK");
+    }
+
+    // ! (not)
+    if !false then {
+        puts("! false: OK");
+    } else {
+        puts("! false: FAIL");
+        return 1;
+    }
+
+    if !true then {
+        puts("! true 应该是 false: FAIL");
+        return 1;
+    } else {
+        puts("! true: OK");
+    }
+
+    // f64 比较
+    var a:f64 = 3.14;
+    var b:f64 = 3.14;
+    if a == b then {
+        puts("f64 ==: OK");
+    } else {
+        puts("f64 ==: FAIL");
+        return 1;
+    }
+
+    if a != 2.72 then {
+        puts("f64 !=: OK");
+    } else {
+        puts("f64 !=: FAIL");
+        return 1;
+    }
+
+    if 1.0 < 2.0 then {
+        puts("f64 <: OK");
+    } else {
+        puts("f64 <: FAIL");
+        return 1;
+    }
+
+    // 复合逻辑
+    if (1 < 2) && (3 < 4) then {
+        puts("复合 &&: OK");
+    } else {
+        puts("复合 &&: FAIL");
+        return 1;
+    }
+
+    if (1 > 2) || (3 < 4) then {
+        puts("复合 ||: OK");
+    } else {
+        puts("复合 ||: FAIL");
+        return 1;
+    }
+
+    puts("比较逻辑测试全部通过");
+    return 0;
+}

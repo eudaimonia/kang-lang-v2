@@ -1,0 +1,82 @@
+// test05_structs.kang — 结构体定义、构造、字段访问和修改
+
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+struct Person {
+    name: str;
+    age: i32;
+}
+
+def main() -> i32 {
+    // 结构体构造
+    var p:Point = Point{x: 3, y: 4};
+    if p.x == 3 then {
+        puts("结构体字段 x: OK");
+    } else {
+        puts("结构体字段 x: FAIL");
+        return 1;
+    }
+
+    if p.y == 4 then {
+        puts("结构体字段 y: OK");
+    } else {
+        puts("结构体字段 y: FAIL");
+        return 1;
+    }
+
+    // 字段赋值
+    p.x = 10;
+    if p.x == 10 then {
+        puts("结构体字段赋值: OK");
+    } else {
+        puts("结构体字段赋值: FAIL");
+        return 1;
+    }
+
+    // str 字段结构体
+    var per:Person = Person{name: "Alice", age: 30};
+    if per.name == "Alice" then {
+        puts("str 字段: OK");
+    } else {
+        puts("str 字段: FAIL");
+        return 1;
+    }
+
+    if per.age == 30 then {
+        puts("i32 字段: OK");
+    } else {
+        puts("i32 字段: FAIL");
+        return 1;
+    }
+
+    // 字符串字段拼接
+    var msg:str = per.name + " is " + str(per.age);
+    if msg == "Alice is 30" then {
+        puts("结构体字段拼接: OK");
+    } else {
+        puts("结构体字段拼接: FAIL");
+        return 1;
+    }
+
+    // 结构体数组
+    var points:[Point] = [Point{x:1, y:2}, Point{x:3, y:4}];
+    if points[0].x == 1 then {
+        puts("结构体数组[0].x: OK");
+    } else {
+        puts("结构体数组[0].x: FAIL");
+        return 1;
+    }
+
+    if points[1].y == 4 then {
+        puts("结构体数组[1].y: OK");
+    } else {
+        puts("结构体数组[1].y: FAIL");
+        return 1;
+    }
+
+    puts("结构体测试全部通过");
+    return 0;
+}

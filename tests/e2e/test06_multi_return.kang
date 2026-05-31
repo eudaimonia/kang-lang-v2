@@ -1,0 +1,95 @@
+// test06_multi_return.kang — 二值返回与多值接收
+
+def divide(a:i32, b:i32) -> (i32, bool) {
+    if b == 0 then {
+        return 0, false;
+    }
+    return a / b, true;
+}
+
+def get_point() -> (i32, i32) {
+    return 7, 8;
+}
+
+def first_only() -> i32 {
+    // 单接收从二值返回: 取第一值
+    var x:i32 = get_point();
+    return x;
+}
+
+def discard_second() -> i32 {
+    // 用 _ 丢弃第二个值
+    var x:i32, _ = get_point();
+    return x;
+}
+
+def main() -> i32 {
+    // 二值接收
+    var q:i32, ok:bool = divide(10, 2);
+    if q == 5 then {
+        puts("二值返回 quotient: OK");
+    } else {
+        puts("二值返回 quotient: FAIL");
+        return 1;
+    }
+
+    if ok == true then {
+        puts("二值返回 ok: OK");
+    } else {
+        puts("二值返回 ok: FAIL");
+        return 1;
+    }
+
+    // 除零情况
+    var q2:i32, ok2:bool = divide(10, 0);
+    if q2 == 0 then {
+        puts("除零 quotient=0: OK");
+    } else {
+        puts("除零 quotient=0: FAIL");
+        return 1;
+    }
+
+    if ok2 == false then {
+        puts("除零 ok=false: OK");
+    } else {
+        puts("除零 ok=false: FAIL");
+        return 1;
+    }
+
+    // 单接收从二值
+    var x:i32 = first_only();
+    if x == 7 then {
+        puts("单接收取第一值: OK");
+    } else {
+        puts("单接收取第一值: FAIL");
+        return 1;
+    }
+
+    // _ 占位丢弃
+    var y:i32 = discard_second();
+    if y == 7 then {
+        puts("_ 丢弃第二值: OK");
+    } else {
+        puts("_ 丢弃第二值: FAIL");
+        return 1;
+    }
+
+    // 直接接收二值
+    var a:i32, b:i32 = get_point();
+    if a == 7 then {
+        puts("直接二值接收 a: OK");
+    } else {
+        puts("直接二值接收 a: FAIL");
+        return 1;
+    }
+
+    if b == 8 then {
+        puts("直接二值接收 b: OK");
+    } else {
+        puts("直接二值接收 b: FAIL");
+        return 1;
+    }
+
+    puts("多返回测试全部通过");
+    return 0;
+}

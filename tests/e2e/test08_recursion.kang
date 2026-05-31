@@ -1,0 +1,86 @@
+// test08_recursion.kang — 递归函数: 阶乘、斐波那契
+
+def factorial(n:i32) -> i32 {
+    if n <= 1 then {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+def fibonacci(n:i32) -> i32 {
+    if n <= 0 then {
+        return 0;
+    }
+    if n == 1 then {
+        return 1;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+def main() -> i32 {
+    // 阶乘
+    var f5:i32 = factorial(5);
+    if f5 == 120 then {
+        puts("factorial(5): OK");
+    } else {
+        var msg:str = "factorial(5): FAIL, got " + str(f5);
+        puts(msg);
+        return 1;
+    }
+
+    var f0:i32 = factorial(0);
+    if f0 == 1 then {
+        puts("factorial(0): OK");
+    } else {
+        puts("factorial(0): FAIL");
+        return 1;
+    }
+
+    var f1:i32 = factorial(1);
+    if f1 == 1 then {
+        puts("factorial(1): OK");
+    } else {
+        puts("factorial(1): FAIL");
+        return 1;
+    }
+
+    // 斐波那契
+    var fib0:i32 = fibonacci(0);
+    if fib0 == 0 then {
+        puts("fibonacci(0): OK");
+    } else {
+        puts("fibonacci(0): FAIL");
+        return 1;
+    }
+
+    var fib1:i32 = fibonacci(1);
+    if fib1 == 1 then {
+        puts("fibonacci(1): OK");
+    } else {
+        puts("fibonacci(1): FAIL");
+        return 1;
+    }
+
+    var fib6:i32 = fibonacci(6);
+    // 0, 1, 1, 2, 3, 5, 8 → fib(6) = 8
+    if fib6 == 8 then {
+        puts("fibonacci(6): OK");
+    } else {
+        var msg:str = "fibonacci(6): FAIL, got " + str(fib6);
+        puts(msg);
+        return 1;
+    }
+
+    var fib10:i32 = fibonacci(10);
+    // fib(10) = 55
+    if fib10 == 55 then {
+        puts("fibonacci(10): OK");
+    } else {
+        var msg:str = "fibonacci(10): FAIL, got " + str(fib10);
+        puts(msg);
+        return 1;
+    }
+
+    puts("递归测试全部通过");
+    return 0;
+}

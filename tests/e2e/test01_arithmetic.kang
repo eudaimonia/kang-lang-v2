@@ -1,0 +1,102 @@
+// test01_arithmetic.kang — i32 和 f64 算术运算及优先级
+
+def main() -> i32 {
+    // i32 加减乘除
+    var a:i32 = 10 + 5;
+    if a == 15 then {
+        puts("i32 加法: OK");
+    } else {
+        puts("i32 加法: FAIL");
+        return 1;
+    }
+
+    var b:i32 = 20 - 7;
+    if b == 13 then {
+        puts("i32 减法: OK");
+    } else {
+        puts("i32 减法: FAIL");
+        return 1;
+    }
+
+    var c:i32 = 6 * 7;
+    if c == 42 then {
+        puts("i32 乘法: OK");
+    } else {
+        puts("i32 乘法: FAIL");
+        return 1;
+    }
+
+    var d:i32 = 100 / 3;
+    if d == 33 then {
+        puts("i32 整除: OK");
+    } else {
+        puts("i32 整除: FAIL");
+        return 1;
+    }
+
+    // 负数
+    var neg:i32 = -42;
+    var pos:i32 = -neg;
+    if pos == 42 then {
+        puts("i32 取负: OK");
+    } else {
+        puts("i32 取负: FAIL");
+        return 1;
+    }
+
+    // f64 字面量和运算
+    var fa:f64 = 1.5;
+    var fb:f64 = 2.5;
+    var fsum:f64 = fa + fb;
+    if fsum == 4.0 then {
+        puts("f64 加法: OK");
+    } else {
+        puts("f64 加法: FAIL");
+        return 1;
+    }
+
+    var fdiff:f64 = fb - fa;
+    if fdiff == 1.0 then {
+        puts("f64 减法: OK");
+    } else {
+        puts("f64 减法: FAIL");
+        return 1;
+    }
+
+    var fprod:f64 = fa * 2.0;
+    if fprod == 3.0 then {
+        puts("f64 乘法: OK");
+    } else {
+        puts("f64 乘法: FAIL");
+        return 1;
+    }
+
+    var fquot:f64 = 10.0 / 2.0;
+    if fquot == 5.0 then {
+        puts("f64 除法: OK");
+    } else {
+        puts("f64 除法: FAIL");
+        return 1;
+    }
+
+    // 运算符优先级: * 优先于 +
+    var prec:i32 = 2 + 3 * 4;
+    if prec == 14 then {
+        puts("优先级 (* > +): OK");
+    } else {
+        puts("优先级 (* > +): FAIL");
+        return 1;
+    }
+
+    // 括号优先级
+    var paren:i32 = (2 + 3) * 4;
+    if paren == 20 then {
+        puts("优先级 (括号): OK");
+    } else {
+        puts("优先级 (括号): FAIL");
+        return 1;
+    }
+
+    puts("算术测试全部通过");
+    return 0;
+}

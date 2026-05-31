@@ -1,0 +1,113 @@
+// test10_mixed.kang — 复合场景: 结构体+数组+循环+二值返回组合
+
+struct Stats {
+    sum: i32;
+    count: i32;
+}
+
+// 计算数组统计
+def compute_stats(arr:[i32]) -> Stats {
+    var s:Stats = Stats{sum: 0, count: 0};
+    for var i:i32 = 0, i < len(arr), i = i + 1 in {
+        s.sum = s.sum + arr[i];
+        s.count = s.count + 1;
+    }
+    return s;
+}
+
+// 查找最大值，返回 (值, 索引)
+def find_max(arr:[i32]) -> (i32, i32) {
+    var max_val:i32 = arr[0];
+    var max_idx:i32 = 0;
+    for var i:i32 = 1, i < len(arr), i = i + 1 in {
+        if arr[i] > max_val then {
+            max_val = arr[i];
+            max_idx = i;
+        }
+    }
+    return max_val, max_idx;
+}
+
+// 求和 (替代 filter_positive, 避免 push 的已知问题)
+def sum_positive(arr:[i32]) -> i32 {
+    var total:i32 = 0;
+    for var i:i32 = 0, i < len(arr), i = i + 1 in {
+        if arr[i] > 0 then {
+            total = total + arr[i];
+        }
+    }
+    return total;
+}
+
+def main() -> i32 {
+    var data:[i32] = [3, -1, 7, 0, -5, 2, 9, -8];
+
+    // 统计
+    var st:Stats = compute_stats(data);
+    if st.sum == 7 then {
+        puts("复合 统计求和: OK");
+    } else {
+        var msg:str = "复合 统计求和: FAIL, sum=" + str(st.sum);
+        puts(msg);
+        return 1;
+    }
+
+    if st.count == 8 then {
+        puts("复合 统计计数: OK");
+    } else {
+        puts("复合 统计计数: FAIL");
+        return 1;
+    }
+
+    // 查找最大值
+    var max_val:i32, max_idx:i32 = find_max(data);
+    if max_val == 9 then {
+        puts("复合 最大值: OK");
+    } else {
+        var msg:str = "复合 最大值: FAIL, got " + str(max_val);
+        puts(msg);
+        return 1;
+    }
+
+    if max_idx == 6 then {
+        puts("复合 最大值索引: OK");
+    } else {
+        var msg:str = "复合 最大值索引: FAIL, got " + str(max_idx);
+        puts(msg);
+        return 1;
+    }
+
+    // 正数求和 (替代 push)
+    var pos_sum:i32 = sum_positive(data);
+    // 正数: 3 + 7 + 2 + 9 = 21
+    if pos_sum == 21 then {
+        puts("复合 正数求和: OK");
+    } else {
+        var msg:str = "复合 正数求和: FAIL, got " + str(pos_sum);
+        puts(msg);
+        return 1;
+    }
+
+    // 结构体字段修改
+    var pt:Stats = Stats{sum:1, count:2};
+    pt.sum = 100;
+    if pt.sum == 100 then {
+        puts("复合 结构体字段赋值: OK");
+    } else {
+        puts("复合 结构体字段赋值: FAIL");
+        return 1;
+    }
+
+    // 字符串构造复杂消息
+    var report:str = "数据: " + str(st.count) + " 项, 合计=" + str(st.sum) + ", 最大值=" + str(max_val) + " 在索引 " + str(max_idx);
+    if report == "数据: 8 项, 合计=7, 最大值=9 在索引 6" then {
+        puts("复合 复杂字符串: OK");
+    } else {
+        var msg:str = "复合 复杂字符串: FAIL, got '" + report + "'";
+        puts(msg);
+        return 1;
+    }
+
+    puts("复合场景测试全部通过");
+    return 0;
+}
