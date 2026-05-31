@@ -1,5 +1,4 @@
-// test03_strings.kang — 字符串拼接、str() 类型转换
-// 已知问题: 字符串索引 s[i] 返回空串, 暂时跳过
+// test03_strings.kang — 字符串拼接、str() 类型转换、索引
 
 def main() -> i32 {
     // 字符串拼接
@@ -65,6 +64,52 @@ def main() -> i32 {
         puts("len(str): OK");
     } else {
         var msg:str = "len(str): FAIL, got " + str(slen);
+        puts(msg);
+        return 1;
+    }
+
+    // str(bool)
+    var st:str = str(true);
+    if st == "true" then {
+        puts("str(true): OK");
+    } else {
+        var msg:str = "str(true): FAIL, got '" + st + "'";
+        puts(msg);
+        return 1;
+    }
+
+    var sf:str = str(false);
+    if sf == "false" then {
+        puts("str(false): OK");
+    } else {
+        puts("str(false): FAIL");
+        return 1;
+    }
+
+    // 字符串索引
+    var s:str = "ABCD";
+    var ch:str = s[0];
+    if ch == "A" then {
+        puts("字符串索引 s[0]: OK");
+    } else {
+        puts("字符串索引 s[0]: FAIL");
+        return 1;
+    }
+
+    var last:str = s[3];
+    if last == "D" then {
+        puts("字符串索引 s[3]: OK");
+    } else {
+        puts("字符串索引 s[3]: FAIL");
+        return 1;
+    }
+
+    // 字符串拼接中隐式调用 str(bool)
+    var bmsg:str = "flag=" + str(true);
+    if bmsg == "flag=true" then {
+        puts("字符串+bool拼接: OK");
+    } else {
+        var msg:str = "字符串+bool拼接: FAIL, got '" + bmsg + "'";
         puts(msg);
         return 1;
     }

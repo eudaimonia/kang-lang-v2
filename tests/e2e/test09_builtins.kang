@@ -1,5 +1,4 @@
 // test09_builtins.kang — 文件 I/O 和类型转换内置函数
-// 已知问题: str(bool) LLVM 类型不匹配; 二值返回的内置函数 ok 标志位置可能与文档不同
 
 def main() -> i32 {
     // ── write_file + file_exists ──
@@ -19,6 +18,31 @@ def main() -> i32 {
         puts("append_file 后仍存在: OK");
     } else {
         puts("append_file 后仍存在: FAIL");
+        return 1;
+    }
+
+    // ── read_file 读取已写入的文件 ──
+    var content:str, ok:bool = read_file("/tmp/t09_io.txt");
+    if ok then {
+        puts("read_file ok标志: OK");
+    } else {
+        puts("read_file ok标志: FAIL");
+        return 1;
+    }
+    if content == "Kang!+more" then {
+        puts("read_file 内容正确: OK");
+    } else {
+        var msg:str = "read_file 内容: FAIL, got '" + content + "'";
+        puts(msg);
+        return 1;
+    }
+
+    // ── read_file 不存在的文件 ──
+    var no_content:str, no_ok:bool = read_file("/tmp/kang_nonexistent_xyz.txt");
+    if no_ok == false then {
+        puts("read_file(不存在) ok=false: OK");
+    } else {
+        puts("read_file(不存在) ok=false: FAIL");
         return 1;
     }
 

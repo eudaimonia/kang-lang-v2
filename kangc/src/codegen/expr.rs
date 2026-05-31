@@ -407,12 +407,119 @@ fn flatten_c_abi_args<'ctx>(
                 let v0 = ok(ctx.builder.build_extract_value(sv, 0, "arg.pair.0"))?;
                 flat.push(v0.into());
             }
+            KangType::Bool => {
+                // C ABI: bool 以 i32 传递, 将 i1 zext 到 i32
+                let i32_val = ok(ctx.builder.build_int_z_extend(
+                    val.into_int_value(),
+                    ctx.context.i32_type(),
+                    "bool.i32",
+                ))?;
+                flat.push(i32_val.into());
+            }
             _ => {
                 flat.push((*val).into());
             }
         }
     }
     Ok(flat)
+}
+
+/// C ABI 返回的 Pair 结构从扁平 C struct 转为 Kang 嵌套 struct
+///
+/// 运行时返回扁平标量结构（i32 表示 bool），Kang 使用嵌套类型（i1 表示 bool）。
+/// 例如: k_read_file 返回 {ptr, i32 len, i32 ok}，Kang 期望 {{ptr, i32}, i1}
+fn repack_c_pair_return<'ctx>(
+    ctx: &CodeGenContext<'ctx>,
+    call: inkwell::values::CallSiteValue<'ctx>,
+    return_ty: &KangType,
+) -> Result<BasicValueEnum<'ctx>> {
+    // C ABI 类型声明为打包形式以匹配 rustc 的 AAPCS64 布局:
+    //   {i32, i32} → i64 (ok << 32 | val)
+    //   {ptr, i32, i32} → {ptr, i64} (ptr 在 x0, (ok<<32)|len 在 x1)
+    //   {f64, i32} → {f64, i64} (f64 在 x0, ok sign-ext 到 64 位在 x1)
+    let c_val = call_val(call)?;
+    let kang_pair = ctx.kang_type_to_basic(return_ty).into_struct_type();
+    let kang_undef = kang_pair.const_zero();
+
+    match return_ty {
+        KangType::Pair(first, second) => {
+            match (first.as_ref(), second.as_ref()) {
+                // KStrBool: {ptr, i64} 其中 i64 = (ok << 32) | len
+                (KangType::Str, KangType::Bool) => {
+                    let c_struct = c_val.into_struct_value();
+                    let ptr = ok(ctx.builder.build_extract_value(c_struct, 0, "cp.ptr"))?;
+                    let packed = ok(ctx.builder.build_extract_value(c_struct, 1, "cp.packed"))?;
+                    let packed_val = packed.into_int_value();
+                    let len = ok(ctx.builder.build_int_truncate(packed_val, ctx.context.i32_type(), "cp.len"))?;
+                    let ok_shifted = ok(ctx.builder.build_int_truncate(
+                        ok(ctx.builder.build_int_unsigned_div(packed_val, ctx.context.i64_type().const_int(0x100000000u64, false), "ok.shift"))?,
+                        ctx.context.i32_type(), "ok.i32",
+                    ))?;
+                    let ok_i1 = ok(ctx.builder.build_int_truncate(ok_shifted, ctx.context.bool_type(), "ok.bool"))?;
+                    build_kang_str_pair(ctx, kang_pair, ptr, len, ok_i1)
+                }
+                // KI32Bool / KBoolBool: i64 = (ok << 32) | val
+                (KangType::I32, KangType::Bool) => {
+                    let packed = c_val.into_int_value();
+                    let val = ok(ctx.builder.build_int_truncate(packed, ctx.context.i32_type(), "cp.val"))?;
+                    let ok_shifted = ok(ctx.builder.build_int_truncate(
+                        ok(ctx.builder.build_int_unsigned_div(packed, ctx.context.i64_type().const_int(0x100000000u64, false), "ok.shift"))?,
+                        ctx.context.i32_type(), "ok.i32",
+                    ))?;
+                    let ok_i1 = ok(ctx.builder.build_int_truncate(ok_shifted, ctx.context.bool_type(), "ok.bool"))?;
+                    let p1 = ok(ctx.builder.build_insert_value(kang_undef, val, 0, "rp.pair.0"))?;
+                    let p2 = ok(ctx.builder.build_insert_value(p1, ok_i1, 1, "rp.pair.1"))?;
+                    Ok(p2.into_struct_value().into())
+                }
+                // KF64Bool: {f64, i64} 其中 i64 = ok sign-extended
+                (KangType::F64, KangType::Bool) => {
+                    let c_struct = c_val.into_struct_value();
+                    let val = ok(ctx.builder.build_extract_value(c_struct, 0, "cp.val"))?;
+                    let ok_i64 = ok(ctx.builder.build_extract_value(c_struct, 1, "cp.ok"))?;
+                    let ok_i1 = ok(ctx.builder.build_int_truncate(ok_i64.into_int_value(), ctx.context.bool_type(), "ok.bool"))?;
+                    let p1 = ok(ctx.builder.build_insert_value(kang_undef, val, 0, "rp.pair.0"))?;
+                    let p2 = ok(ctx.builder.build_insert_value(p1, ok_i1, 1, "rp.pair.1"))?;
+                    Ok(p2.into_struct_value().into())
+                }
+                // KBoolBool: i64 = (ok << 32) | val, 两个都是 bool
+                (KangType::Bool, KangType::Bool) => {
+                    let packed = c_val.into_int_value();
+                    let val_i32 = ok(ctx.builder.build_int_truncate(packed, ctx.context.i32_type(), "cp.val"))?;
+                    let ok_shifted = ok(ctx.builder.build_int_truncate(
+                        ok(ctx.builder.build_int_unsigned_div(packed, ctx.context.i64_type().const_int(0x100000000u64, false), "ok.shift"))?,
+                        ctx.context.i32_type(), "ok.i32",
+                    ))?;
+                    let val_i1 = ok(ctx.builder.build_int_truncate(val_i32, ctx.context.bool_type(), "val.bool"))?;
+                    let ok_i1 = ok(ctx.builder.build_int_truncate(ok_shifted, ctx.context.bool_type(), "ok.bool"))?;
+                    let p1 = ok(ctx.builder.build_insert_value(kang_undef, val_i1, 0, "rp.pair.0"))?;
+                    let p2 = ok(ctx.builder.build_insert_value(p1, ok_i1, 1, "rp.pair.1"))?;
+                    Ok(p2.into_struct_value().into())
+                }
+                _ => Ok(c_val.into()),
+            }
+        }
+        _ => Ok(c_val.into()),
+    }
+}
+
+/// 从 ptr + 拆分后的 len/i1 构建 Kang (str, bool) = {{ptr, i32}, i1}
+fn build_kang_str_pair<'ctx>(
+    ctx: &CodeGenContext<'ctx>,
+    struct_ty: inkwell::types::StructType<'ctx>,
+    ptr: inkwell::values::BasicValueEnum<'ctx>,
+    len: inkwell::values::IntValue<'ctx>,
+    ok_i1: inkwell::values::IntValue<'ctx>,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>> {
+    let str_undef = ctx.context.struct_type(
+        &[ctx.context.ptr_type(AddressSpace::default()).into(), ctx.context.i32_type().into()],
+        false,
+    ).const_zero();
+    let s1 = ok(ctx.builder.build_insert_value(str_undef, ptr, 0, "rp.ptr"))?;
+    let s2 = ok(ctx.builder.build_insert_value(s1, len, 1, "rp.str"))?;
+    let pair_undef = struct_ty.const_zero();
+    let p1 = ok(ctx.builder.build_insert_value(pair_undef, s2, 0, "rp.pair.0"))?;
+    let p2 = ok(ctx.builder.build_insert_value(p1, ok_i1, 1, "rp.pair.1"))?;
+    Ok(p2.into_struct_value().into())
 }
 
 fn codegen_call<'ctx>(
@@ -455,6 +562,8 @@ fn codegen_call<'ctx>(
     let call = ok(ctx.builder.build_call(func, &llvm_args, "call"))?;
     if return_ty.is_void() {
         Ok(ctx.context.i32_type().const_zero().into())
+    } else if func.get_first_basic_block().is_none() && matches!(return_ty, KangType::Pair(_, _)) {
+        repack_c_pair_return(ctx, call, return_ty)
     } else {
         call_val(call)
     }
@@ -547,7 +656,20 @@ fn codegen_builtin_push<'ctx>(
         elem_ptr.into(),
         elem_size_val.into(),
     ], "push"))?;
-    call_val(call)
+
+    // k_push 返回新的 {ptr, len}, 需要写回数组变量的 alloca
+    if let TypedExprKind::Ident(var_name) = &args[0].kind {
+        if let Some((var_ptr, _)) = ctx.lookup_var(var_name) {
+            let new_arr = call_val(call)?;
+            let _ = ctx.builder.build_store(var_ptr, new_arr);
+            return Ok(ctx.context.i32_type().const_zero().into());
+        }
+    }
+
+    // 非 Ident 参数: 函数返回值虽被丢弃但语义上无意义(如 push(字面量, x))
+    // 编译器语义检查阶段应拦截此类用法, 此处仅防御
+    call_val(call)?;
+    Ok(ctx.context.i32_type().const_zero().into())
 }
 
 // Kang 类型的 LLVM 存储大小（字节），用于数组元素偏移计算
@@ -574,33 +696,51 @@ fn codegen_index<'ctx>(
     // R1/R2: 数组/字符串索引越界检查
     runtime::insert_bounds_check(ctx, idx, arr_len.into_int_value());
 
-    let elem_size = size_of_kang(ctx, result_ty);
-    let offset = ok(ctx.builder.build_int_mul(
-        idx,
-        ctx.context.i32_type().const_int(elem_size as u64, true),
-        "offset",
-    ))?;
+    let is_str = matches!(array.ty, KangType::Str);
 
-    // ptr_to_int: 指针转为 i64 做偏移计算（避免 64 位平台截断）
+    // 字符串: 指针直接指向数据, 每元素 1 字节; 数组: 跳过 4 字节长度头
+    let elem_size = if is_str { 1 } else { size_of_kang(ctx, result_ty) };
+
     let arr_addr = ok(ctx.builder.build_ptr_to_int(
         arr_ptr.into_pointer_value(),
         ctx.context.i64_type(),
         "arr.addr",
     ))?;
-    let offset_64 = ok(ctx.builder.build_int_z_extend(offset, ctx.context.i64_type(), "offset64"))?;
-    // heap 布局: [4 字节 i32 len] [数据...]，base = arr_addr + 4
-    let base_addr = ok(ctx.builder.build_int_add(
-        arr_addr,
-        ctx.context.i64_type().const_int(4u64, false),
-        "base",
+
+    let base_addr = if is_str {
+        arr_addr
+    } else {
+        ok(ctx.builder.build_int_add(
+            arr_addr,
+            ctx.context.i64_type().const_int(4u64, false),
+            "base",
+        ))?
+    };
+
+    let offset = ok(ctx.builder.build_int_mul(
+        idx,
+        ctx.context.i32_type().const_int(elem_size as u64, true),
+        "offset",
     ))?;
+    let offset_64 = ok(ctx.builder.build_int_z_extend(offset, ctx.context.i64_type(), "offset64"))?;
     let elem_addr = ok(ctx.builder.build_int_add(base_addr, offset_64, "elem.addr"))?;
     let elem_ptr = ok(ctx.builder.build_int_to_ptr(
         elem_addr,
         ctx.context.ptr_type(AddressSpace::default()),
         "elem.ptr",
     ))?;
-    Ok(ok(ctx.builder.build_load(ctx.kang_type_to_basic(result_ty), elem_ptr, "elem"))?)
+
+    // 字符串索引返回 Kang str 结构体 {ptr, 1}，数组索引返回元素值
+    if is_str {
+        let kstr_type = ctx.kang_type_to_basic(result_ty).into_struct_type();
+        let undef = kstr_type.const_zero();
+        let len_val = ctx.context.i32_type().const_int(1, true);
+        let s1 = ok(ctx.builder.build_insert_value(undef, elem_ptr, 0, "ch.ptr"))?.into_struct_value();
+        let s2 = ok(ctx.builder.build_insert_value(s1, len_val, 1, "ch.str"))?.into_struct_value();
+        Ok(s2.into())
+    } else {
+        Ok(ok(ctx.builder.build_load(ctx.kang_type_to_basic(result_ty), elem_ptr, "elem"))?)
+    }
 }
 
 // ── 字段访问 ──────────────────────────────────────────────────────────────

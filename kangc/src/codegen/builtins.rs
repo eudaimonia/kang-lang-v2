@@ -44,26 +44,30 @@ fn kptrlen_type<'ctx>(ctx: &CodeGenContext<'ctx>) -> inkwell::types::StructType<
     ctx.context.struct_type(&[ptr_ty.into(), i32_ty.into()], false)
 }
 
+// 注意: Apple ARM64 上 LLVM 将 struct 字段拆分为独立寄存器返回,
+// 但 rustc (kangrt) 遵循标准 AAPCS64 — 将字段打包到 8 字节块中。
+// 为避免 ABI 不匹配, 将多字段返回类型声明为打包形式:
+//   {i32, i32} → i64        (rustc 返回 (ok << 32) | val)
+//   {ptr, i32, i32} → {ptr, i64}  (rustc 返回 ptr 在 x0, (ok<<32)|len 在 x1)
+//   {f64, i32} → {f64, i64}  (f64 在 x0, ok sign-ext 到 64 位在 x1)
 fn kstr_bool_type<'ctx>(ctx: &CodeGenContext<'ctx>) -> inkwell::types::StructType<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let i32_ty = ctx.context.i32_type();
-    ctx.context.struct_type(&[ptr_ty.into(), i32_ty.into(), i32_ty.into()], false)
+    let i64_ty = ctx.context.i64_type();
+    ctx.context.struct_type(&[ptr_ty.into(), i64_ty.into()], false)
 }
 
-fn ki32_bool_type<'ctx>(ctx: &CodeGenContext<'ctx>) -> inkwell::types::StructType<'ctx> {
-    let i32_ty = ctx.context.i32_type();
-    ctx.context.struct_type(&[i32_ty.into(), i32_ty.into()], false)
+fn ki32_bool_type<'ctx>(ctx: &CodeGenContext<'ctx>) -> inkwell::types::IntType<'ctx> {
+    ctx.context.i64_type()
 }
 
 fn kf64_bool_type<'ctx>(ctx: &CodeGenContext<'ctx>) -> inkwell::types::StructType<'ctx> {
     let f64_ty = ctx.context.f64_type();
-    let i32_ty = ctx.context.i32_type();
-    ctx.context.struct_type(&[f64_ty.into(), i32_ty.into()], false)
+    let i64_ty = ctx.context.i64_type();
+    ctx.context.struct_type(&[f64_ty.into(), i64_ty.into()], false)
 }
 
-fn kbool_bool_type<'ctx>(ctx: &CodeGenContext<'ctx>) -> inkwell::types::StructType<'ctx> {
-    let i32_ty = ctx.context.i32_type();
-    ctx.context.struct_type(&[i32_ty.into(), i32_ty.into()], false)
+fn kbool_bool_type<'ctx>(ctx: &CodeGenContext<'ctx>) -> inkwell::types::IntType<'ctx> {
+    ctx.context.i64_type()
 }
 
 fn kstr_params<'ctx>(ctx: &CodeGenContext<'ctx>) -> Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> {

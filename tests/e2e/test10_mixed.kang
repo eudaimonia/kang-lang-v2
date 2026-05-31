@@ -28,15 +28,15 @@ def find_max(arr:[i32]) -> (i32, i32) {
     return max_val, max_idx;
 }
 
-// 求和 (替代 filter_positive, 避免 push 的已知问题)
-def sum_positive(arr:[i32]) -> i32 {
-    var total:i32 = 0;
+// 筛选正数到新数组
+def filter_positive(arr:[i32]) -> [i32] {
+    var result:[i32] = [];
     for var i:i32 = 0, i < len(arr), i = i + 1 in {
         if arr[i] > 0 then {
-            total = total + arr[i];
+            push(result, arr[i]);
         }
     }
-    return total;
+    return result;
 }
 
 def main() -> i32 {
@@ -77,14 +77,26 @@ def main() -> i32 {
         return 1;
     }
 
-    // 正数求和 (替代 push)
-    var pos_sum:i32 = sum_positive(data);
-    // 正数: 3 + 7 + 2 + 9 = 21
-    if pos_sum == 21 then {
-        puts("复合 正数求和: OK");
+    // 筛选正数 (push 到新数组)
+    var filtered:[i32] = filter_positive(data);
+    // 正数: [3, 7, 2, 9]
+    if len(filtered) == 4 then {
+        puts("复合 筛选正数 长度=4: OK");
     } else {
-        var msg:str = "复合 正数求和: FAIL, got " + str(pos_sum);
+        var msg:str = "复合 筛选正数 长度: FAIL, got " + str(len(filtered));
         puts(msg);
+        return 1;
+    }
+    if filtered[0] == 3 then {
+        puts("复合 筛选正数[0]=3: OK");
+    } else {
+        puts("复合 筛选正数[0]: FAIL");
+        return 1;
+    }
+    if filtered[3] == 9 then {
+        puts("复合 筛选正数[3]=9: OK");
+    } else {
+        puts("复合 筛选正数[3]: FAIL");
         return 1;
     }
 

@@ -1,4 +1,4 @@
-// test04_arrays.kang — 数组字面量、索引、len、元素赋值、遍历
+// test04_arrays.kang — 数组字面量、索引、len、push、元素赋值、遍历
 
 def main() -> i32 {
     // 数组字面量
@@ -35,17 +35,59 @@ def main() -> i32 {
         return 1;
     }
 
+    // push 新元素 (在求和前先 push 一个)
+    push(arr, 60);
+
     // 遍历数组求和
     var sum:i32 = 0;
     for var i:i32 = 0, i < len(arr), i = i + 1 in {
         sum = sum + arr[i];
     }
-    // 10+20+99+40+50 = 219 (arr[2] 被改为 99, 没有 push)
-    if sum == 219 then {
+    // 10+20+99+40+50+60 = 279 (arr[2] 被改为 99)
+    if sum == 279 then {
         puts("数组遍历求和: OK");
     } else {
         var msg:str = "数组遍历求和: FAIL, sum=" + str(sum);
         puts(msg);
+        return 1;
+    }
+
+    // push 新元素
+    push(arr, 70);
+    push(arr, 80);
+    if len(arr) == 8 then {
+        puts("push 后长度=8: OK");
+    } else {
+        var msg:str = "push 后长度: FAIL, len=" + str(len(arr));
+        puts(msg);
+        return 1;
+    }
+    if arr[6] == 70 then {
+        puts("push arr[6]=70: OK");
+    } else {
+        puts("push arr[6]: FAIL");
+        return 1;
+    }
+    if arr[7] == 80 then {
+        puts("push arr[7]=80: OK");
+    } else {
+        puts("push arr[7]: FAIL");
+        return 1;
+    }
+
+    // push 到空数组
+    var empty_arr:[i32] = [];
+    push(empty_arr, 100);
+    if len(empty_arr) == 1 then {
+        puts("push 空数组: OK");
+    } else {
+        puts("push 空数组: FAIL");
+        return 1;
+    }
+    if empty_arr[0] == 100 then {
+        puts("push 空数组[0]=100: OK");
+    } else {
+        puts("push 空数组[0]: FAIL");
         return 1;
     }
 

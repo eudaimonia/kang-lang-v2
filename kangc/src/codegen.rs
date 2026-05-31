@@ -376,4 +376,39 @@ mod tests {
             }
         }
     }
+
+    // ── 回归测试: 已修复的编译器 Bug ────────────────────────────────────────────
+
+    #[test]
+    fn str_bool_zext_for_c_abi() {
+        // Bug 1: str(bool) LLVM 类型不匹配 — flatten_c_abi_args 须将 i1 zext 到 i32
+        let ir = compile_ir("def f(b:bool) -> str { return str(b); }");
+        assert!(ir.contains("zext"), "str(b) 应生成 zext i1 -> i32, got:\n{}", ir);
+    }
+
+    #[test]
+    fn str_index_direct_ptr_access() {
+        // Bug 2: 字符串索引不应有 +4 偏移（字符串没有堆长度头）
+        // 验证字符串索引 char 返回 Kang str 结构体 {ptr, 1}
+        let ir = compile_ir("def f() -> str { var s:str = \"hello\"; return s[0]; }");
+        // 不应该包含 +4 偏移
+        assert!(!ir.contains("add i64 %arr.addr, 4"), "str index 不应有 +4 堆头偏移");
+    }
+
+    #[test]
+    fn push_stores_back_to_variable() {
+        // Bug 3: push() 必须将 k_push 返回值存回变量 alloca
+        let ir = compile_ir("def f() -> void { var arr:[i32] = [1,2]; push(arr, 3); return; }");
+        // push 调用后应有 store 指令写回变量
+        let push_pos = ir.find("@k_push").expect("IR 应包含 k_push 调用");
+        let after_push = &ir[push_pos..];
+        assert!(after_push.contains("store"), "push 后应有 store 写回变量, got:\n{}", ir);
+    }
+
+    #[test]
+    fn read_file_pair_repacking() {
+        // Bug 4: read_file 返回 {ptr,i64} 须 repack 为 Kang pair {{ptr,i32},i1}
+        let ir = compile_ir("def f() -> str { var c:str, ok:bool = read_file(\"/tmp/t\"); return c; }");
+        assert!(ir.contains("k_read_file"), "应调用 k_read_file");
+    }
 }
