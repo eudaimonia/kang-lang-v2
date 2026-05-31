@@ -219,13 +219,37 @@ AST + 每个表达式节点的类型标注：
 ```rust
 // kangc/src/lib.rs — 每个阶段是独立函数, stats 作为可变引用贯穿
 
+// 编译管线阶段标识
+pub enum PipelineStage { Tokens, Ast, TypedAst, LlvmIr, Object }
+
+// 共享管线: 运行到指定阶段，返回统计数据 + 可选阶段输出
+pub fn compile_to_stage(
+    source: &str,
+    file_path: &str,
+    target_triple: Option<&str>,
+    stage: PipelineStage,
+    object_path: Option<&Path>,
+) -> Result<(CompilerStats, Option<String>), KangError>;
+
+// 各阶段独立函数
 pub fn tokenize(source: &str, stats: &mut LexStats) -> Result<Vec<Token>, LexError>;
 pub fn parse(tokens: &[Token], stats: &mut ParseStats) -> Result<ast::Program, ParseError>;
 pub fn check(program: &ast::Program, stats: &mut SemanticStats) -> Result<semantic::TypedProgram, Vec<SemanticError>>;
-pub fn codegen(program: &semantic::TypedProgram, rt_path: &Path, stats: &mut CodeGenStats) -> Result<CodeGenResult, CodeGenError>;
+pub fn codegen(
+    program: &semantic::TypedProgram,
+    stats: &mut CodeGenStats,
+    target_triple: Option<&str>,
+    object_path: Option<&Path>,
+) -> Result<CodeGenResult, CodeGenError>;
 
-// 便捷包装
-pub fn compile_full(source: &str, rt_path: &Path) -> Result<(Vec<u8>, CompilerStats), Error>;
+// 便捷包装: 全流程编译，返回各阶段产物与统计
+pub fn compile_full(
+    source: &str,
+    file_path: &str,
+) -> Result<(TypedProgram, CodeGenResult, SourceStats, LexStats, ParseStats, SemanticStats, CodeGenStats), KangError>;
+
+// 统一错误类型
+pub enum KangError { Lex(LexError), Parse(ParseError), Semantic(SemanticError), CodeGen(CodeGenError) }
 ```
 
 ---
@@ -535,7 +559,7 @@ M3 (运行时) ─┤  ← 与 M1/M2 并行
 | `write_file` | `write_file(path: str, content: str) -> void` | `fopen("w")` + `fputs` + `fclose` |
 | `append_file` | `append_file(path: str, content: str) -> void` | `fopen("a")` + `fputs` + `fclose` |
 | `file_exists` | `file_exists(path: str) -> bool` | `access(F_OK)` |
-| `file_size` | `file_size(path: str) -> (i32, bool)` | `stat` + `st_size` |
+| `file_size` | `file_size(path: str) -> (i32, bool)` | `fseek(SEEK_END)` + `ftell` |
 
 **类型转换 (8)**
 
