@@ -1,0 +1,80 @@
+// prime_factor.kang — 试除法分解质因数
+
+def is_prime(n:i32) -> bool {
+    if n <= 1 then { return false; }
+    if n <= 3 then { return true; }
+    if n - (n / 2) * 2 == 0 then { return false; }
+    var d:i32 = 3;
+    for var i:i32 = 0, d * d <= n, i = i + 1 in {
+        if n - (n / d) * d == 0 then { return false; }
+        d = d + 2;
+    }
+    return true;
+}
+
+// 试除法分解质因数，返回因子数组
+def factorize(n:i32) -> [i32] {
+    var factors:[i32] = [];
+    var x:i32 = n;
+    // 提取因子 2
+    for var i:i32 = 0, x - (x / 2) * 2 == 0, i = i + 1 in {
+        push(factors, 2);
+        x = x / 2;
+    }
+    // 提取奇数因子
+    var d:i32 = 3;
+    for var i:i32 = 0, d * d <= x, i = i + 1 in {
+        for var j:i32 = 0, x - (x / d) * d == 0, j = j + 1 in {
+            push(factors, d);
+            x = x / d;
+        }
+        d = d + 2;
+    }
+    if x > 1 then {
+        push(factors, x);
+    }
+    return factors;
+}
+
+def main() -> i32 {
+    // 质数检测
+    if is_prime(2) != true  then { puts("2: FAIL"); return 1; }
+    if is_prime(17) != true then { puts("17: FAIL"); return 1; }
+    if is_prime(97) != true then { puts("97: FAIL"); return 1; }
+    if is_prime(1) != false then { puts("1: FAIL"); return 1; }
+    if is_prime(100) != false then { puts("100: FAIL"); return 1; }
+
+    // 质因数分解
+    var f84:[i32] = factorize(84);   // 2, 2, 3, 7
+    if len(f84) != 4  then { puts("84 因子数: FAIL"); return 1; }
+    if f84[0] != 2 then { puts("84[0]: FAIL"); return 1; }
+    if f84[3] != 7 then { puts("84[3]: FAIL"); return 1; }
+
+    var f97:[i32] = factorize(97);   // 97 (质数)
+    if len(f97) != 1 then { puts("97 因子数: FAIL"); return 1; }
+    if f97[0] != 97 then { puts("97[0]: FAIL"); return 1; }
+
+    var f120:[i32] = factorize(120); // 2, 2, 2, 3, 5
+    if len(f120) != 5 then { puts("120 因子数: FAIL"); return 1; }
+
+    // 验证: 所有因子乘积等于原数
+    var n:i32 = 84;
+    var prod:i32 = 1;
+    for var i:i32 = 0, i < len(f84), i = i + 1 in {
+        prod = prod * f84[i];
+    }
+    if prod != n then { puts("84 乘积验证: FAIL"); return 1; }
+
+    var out:str = str(n) + " = ";
+    for var i:i32 = 0, i < len(f84), i = i + 1 in {
+        out = out + str(f84[i]);
+        if i < len(f84) - 1 then { out = out + " * "; }
+    }
+    puts(out);
+
+    if is_prime(97) then {
+        puts("97 是质数");
+    }
+    puts("prime_factor: OK");
+    return 0;
+}

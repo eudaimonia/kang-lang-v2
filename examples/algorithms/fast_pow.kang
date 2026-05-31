@@ -1,0 +1,59 @@
+// fast_pow.kang — 快速幂（二分求幂），O(log n) 计算 a^b
+
+// 快速幂: 迭代法, a^b mod m (设 m=0 时不取模)
+def fast_pow(a:i32, b:i32) -> i32 {
+    var base:i32 = a;
+    var exp:i32 = b;
+    var result:i32 = 1;
+    for var i:i32 = 0, exp > 0, i = i in {
+        if exp - (exp / 2) * 2 == 1 then {  // exp % 2
+            result = result * base;
+        }
+        base = base * base;
+        exp = exp / 2;
+    }
+    return result;
+}
+
+// 递归版快速幂
+def fast_pow_rec(a:i32, b:i32) -> i32 {
+    if b == 0 then { return 1; }
+    var half:i32 = fast_pow_rec(a, b / 2);
+    if b - (b / 2) * 2 == 0 then {
+        return half * half;
+    } else {
+        return half * half * a;
+    }
+}
+
+def main() -> i32 {
+    // 迭代版测试
+    if fast_pow(2, 0) != 1    then { puts("2^0: FAIL"); return 1; }
+    if fast_pow(2, 10) != 1024 then { puts("2^10: FAIL"); return 1; }
+    if fast_pow(3, 5) != 243  then { puts("3^5: FAIL"); return 1; }
+    if fast_pow(5, 3) != 125  then { puts("5^3: FAIL"); return 1; }
+    if fast_pow(10, 6) != 1000000 then { puts("10^6: FAIL"); return 1; }
+
+    // 递归版测试
+    if fast_pow_rec(2, 0) != 1    then { puts("rec 2^0: FAIL"); return 1; }
+    if fast_pow_rec(2, 10) != 1024 then { puts("rec 2^10: FAIL"); return 1; }
+    if fast_pow_rec(3, 5) != 243  then { puts("rec 3^5: FAIL"); return 1; }
+
+    // 一致性验证
+    for var a:i32 = 1, a <= 5, a = a + 1 in {
+        for var b:i32 = 0, b <= 8, b = b + 1 in {
+            if fast_pow(a, b) != fast_pow_rec(a, b) then {
+                var msg:str = "mismatch: " + str(a) + "^" + str(b);
+                puts(msg);
+                return 1;
+            }
+        }
+    }
+
+    puts("2^10 = " + str(fast_pow(2, 10)));
+    puts("3^5  = " + str(fast_pow(3, 5)));
+    puts("5^3  = " + str(fast_pow(5, 3)));
+    puts("迭代/递归一致性验证: 1^0..5^8 全部通过");
+    puts("fast_pow: OK");
+    return 0;
+}

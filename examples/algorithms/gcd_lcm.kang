@@ -1,0 +1,36 @@
+// gcd_lcm.kang — 欧几里得算法求最大公约数与最小公倍数
+
+def gcd(a:i32, b:i32) -> i32 {
+    var x:i32 = a;
+    var y:i32 = b;
+    for var tmp:i32 = 0, y != 0, tmp = 0 in {
+        tmp = y;
+        y = x - (x / y) * y;  // x mod y
+        x = tmp;
+    }
+    return x;
+}
+
+def lcm(a:i32, b:i32) -> i32 {
+    return a / gcd(a, b) * b;
+}
+
+def main() -> i32 {
+    // GCD 测试
+    if gcd(12, 8) != 4    then { puts("gcd(12,8): FAIL"); return 1; }
+    if gcd(17, 13) != 1   then { puts("gcd(17,13): FAIL"); return 1; }
+    if gcd(100, 25) != 25 then { puts("gcd(100,25): FAIL"); return 1; }
+    if gcd(0, 5) != 5     then { puts("gcd(0,5): FAIL"); return 1; }
+    if gcd(7, 7) != 7     then { puts("gcd(7,7): FAIL"); return 1; }
+
+    // LCM 测试
+    if lcm(12, 8) != 24    then { puts("lcm(12,8): FAIL"); return 1; }
+    if lcm(7, 11) != 77    then { puts("lcm(7,11): FAIL"); return 1; }
+    if lcm(100, 25) != 100 then { puts("lcm(100,25): FAIL"); return 1; }
+
+    puts("gcd(12, 8) = " + str(gcd(12, 8)));
+    puts("lcm(12, 8) = " + str(lcm(12, 8)));
+    puts("gcd(1071, 462) = " + str(gcd(1071, 462)));  // 21
+    puts("gcd_lcm: OK");
+    return 0;
+}

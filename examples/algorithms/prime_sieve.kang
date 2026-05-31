@@ -1,0 +1,49 @@
+// prime_sieve.kang — 埃拉托斯特尼筛法求素数
+
+def sieve(limit:i32) -> [i32] {
+    // 初始化标记数组: is_prime[0] = is_prime[1] = false
+    var is_prime:[bool] = [];
+    push(is_prime, false);  // 0
+    push(is_prime, false);  // 1
+    for var i:i32 = 2, i <= limit, i = i + 1 in {
+        push(is_prime, true);
+    }
+
+    for var p:i32 = 2, p * p <= limit, p = p + 1 in {
+        if is_prime[p] then {
+            for var m:i32 = p * p, m <= limit, m = m + p in {
+                is_prime[m] = false;
+            }
+        }
+    }
+
+    var primes:[i32] = [];
+    for var i:i32 = 2, i <= limit, i = i + 1 in {
+        if is_prime[i] then {
+            push(primes, i);
+        }
+    }
+    return primes;
+}
+
+def main() -> i32 {
+    var primes:[i32] = sieve(50);
+    // 50 以内的素数: 2,3,5,7,11,13,17,19,23,29,31,37,41,43,47 → 15 个
+    if len(primes) != 15 then {
+        var msg:str = "素数个数: FAIL, 期望 15, 实际 " + str(len(primes));
+        puts(msg);
+        return 1;
+    }
+    if primes[0] != 2  then { puts("primes[0]: FAIL"); return 1; }
+    if primes[5] != 13 then { puts("primes[5]: FAIL"); return 1; }
+    if primes[14] != 47 then { puts("primes[last]: FAIL"); return 1; }
+
+    var out:str = "50以内的素数 (" + str(len(primes)) + "个): ";
+    for var i:i32 = 0, i < len(primes), i = i + 1 in {
+        out = out + str(primes[i]);
+        if i < len(primes) - 1 then { out = out + ", "; }
+    }
+    puts(out);
+    puts("prime_sieve: OK");
+    return 0;
+}

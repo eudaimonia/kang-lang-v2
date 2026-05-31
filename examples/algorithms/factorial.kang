@@ -1,0 +1,47 @@
+// factorial.kang — 递归和迭代两种方式计算阶乘
+
+def factorial_rec(n:i32) -> i32 {
+    if n <= 1 then { return 1; }
+    return n * factorial_rec(n - 1);
+}
+
+def factorial_iter(n:i32) -> i32 {
+    var result:i32 = 1;
+    for var i:i32 = 2, i <= n, i = i + 1 in {
+        result = result * i;
+    }
+    return result;
+}
+
+def main() -> i32 {
+    // 验证递归版本
+    if factorial_rec(0) != 1   then { puts("rec(0): FAIL"); return 1; }
+    if factorial_rec(1) != 1   then { puts("rec(1): FAIL"); return 1; }
+    if factorial_rec(5) != 120 then { puts("rec(5): FAIL"); return 1; }
+    if factorial_rec(7) != 5040 then { puts("rec(7): FAIL"); return 1; }
+
+    // 验证迭代版本
+    if factorial_iter(0) != 1   then { puts("iter(0): FAIL"); return 1; }
+    if factorial_iter(1) != 1   then { puts("iter(1): FAIL"); return 1; }
+    if factorial_iter(5) != 120 then { puts("iter(5): FAIL"); return 1; }
+    if factorial_iter(10) != 3628800 then { puts("iter(10): FAIL"); return 1; }
+
+    // 比较递归和迭代结果一致性
+    var all_match:bool = true;
+    for var n:i32 = 0, n <= 10, n = n + 1 in {
+        if factorial_rec(n) != factorial_iter(n) then {
+            all_match = false;
+        }
+    }
+    if all_match then {
+        puts("0!..10! = " + str(factorial_iter(0)) + ", " + str(factorial_iter(1))
+            + ", " + str(factorial_iter(2)) + ", " + str(factorial_iter(3))
+            + ", " + str(factorial_iter(4)) + ", " + str(factorial_iter(5))
+            + ", ..., " + str(factorial_iter(10)));
+        puts("factorial: OK");
+    } else {
+        puts("factorial: FAIL (rec/iter mismatch)");
+        return 1;
+    }
+    return 0;
+}

@@ -1,0 +1,32 @@
+// palindrome.kang — 判断字符串是否为回文
+
+def is_palindrome(s:str) -> bool {
+    var n:i32 = len(s);
+    for var i:i32 = 0, i < n / 2, i = i + 1 in {
+        if s[i] != s[n - 1 - i] then {
+            return false;
+        }
+    }
+    return true;
+}
+
+def main() -> i32 {
+    // 回文测试
+    if !is_palindrome("racecar") then { puts("racecar: FAIL"); return 1; }
+    if !is_palindrome("madam")   then { puts("madam: FAIL"); return 1; }
+    if !is_palindrome("a")       then { puts("a: FAIL"); return 1; }
+    if !is_palindrome("")        then { puts("empty: FAIL"); return 1; }
+    if !is_palindrome("abba")    then { puts("abba: FAIL"); return 1; }
+    if !is_palindrome("abcba")   then { puts("abcba: FAIL"); return 1; }
+
+    // 非回文测试
+    if is_palindrome("hello")   then { puts("hello: FAIL (false positive)"); return 1; }
+    if is_palindrome("abca")    then { puts("abca: FAIL (false positive)"); return 1; }
+    if is_palindrome("ab")      then { puts("ab: FAIL (false positive)"); return 1; }
+
+    puts("'racecar' 是回文: " + str(is_palindrome("racecar")));
+    puts("'hello'   是回文: " + str(is_palindrome("hello")));
+    puts("''        是回文: " + str(is_palindrome("")));
+    puts("palindrome: OK");
+    return 0;
+}

@@ -1,0 +1,50 @@
+// binary_search.kang — 在有序数组中二分查找目标值
+
+// 返回目标值的索引，找不到返回 -1
+def binary_search(arr:[i32], target:i32) -> i32 {
+    var lo:i32 = 0;
+    var hi:i32 = len(arr) - 1;
+    for var found:i32 = -1, lo <= hi && found == -1, found = found in {
+        var mid:i32 = lo + (hi - lo) / 2;
+        if arr[mid] == target then {
+            found = mid;
+            return found;
+        } else {
+            if arr[mid] < target then {
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+    }
+    return -1;
+}
+
+def main() -> i32 {
+    var data:[i32] = [2, 5, 8, 12, 16, 23, 38, 45, 56, 67, 78, 89];
+    var n:i32 = len(data);
+
+    // 查找存在的元素
+    if binary_search(data, 2) != 0  then { puts("find 2: FAIL"); return 1; }
+    if binary_search(data, 89) != 11 then { puts("find 89: FAIL"); return 1; }
+    if binary_search(data, 38) != 6  then { puts("find 38: FAIL"); return 1; }
+
+    // 查找不存在的元素
+    if binary_search(data, 1) != -1  then { puts("find 1: FAIL"); return 1; }
+    if binary_search(data, 50) != -1 then { puts("find 50: FAIL"); return 1; }
+    if binary_search(data, 99) != -1 then { puts("find 99: FAIL"); return 1; }
+
+    // 遍历验证: 每个元素都能正确找到
+    for var i:i32 = 0, i < n, i = i + 1 in {
+        if binary_search(data, data[i]) != i then {
+            var msg:str = "验证 data[" + str(i) + "]=" + str(data[i]) + " 失败";
+            puts(msg);
+            return 1;
+        }
+    }
+
+    puts("排序数组: " + str(data[0]) + " " + str(data[1]) + " ... " + str(data[n-1]));
+    puts("所有元素二分查找通过 (" + str(n) + " 个)");
+    puts("binary_search: OK");
+    return 0;
+}

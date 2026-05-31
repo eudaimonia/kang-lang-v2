@@ -1,0 +1,46 @@
+// hanoi.kang — 汉诺塔问题，递归求解并统计步数
+
+// 返回移动步数
+def hanoi(n:i32, from_peg:str, to_peg:str, aux_peg:str) -> i32 {
+    if n == 0 then { return 0; }
+    var moves:i32 = 0;
+    if n == 1 then {
+        var step:str = from_peg + " -> " + to_peg;
+        puts(step);
+        return 1;
+    }
+    moves = moves + hanoi(n - 1, from_peg, aux_peg, to_peg);
+    var step:str = from_peg + " -> " + to_peg;
+    puts(step);
+    moves = moves + 1;
+    moves = moves + hanoi(n - 1, aux_peg, to_peg, from_peg);
+    return moves;
+}
+
+// 理论最少步数: 2^n - 1
+def expected_moves(n:i32) -> i32 {
+    var result:i32 = 1;
+    for var i:i32 = 0, i < n, i = i + 1 in {
+        result = result * 2;
+    }
+    return result - 1;
+}
+
+def main() -> i32 {
+    var n:i32 = 3;
+    var expected:i32 = expected_moves(n);  // 2^3 - 1 = 7
+
+    puts("汉诺塔 " + str(n) + " 层:");
+    var moves:i32 = hanoi(n, "A", "C", "B");
+
+    var msg:str = "总步数: " + str(moves) + " (理论: " + str(expected) + ")";
+    puts(msg);
+
+    if moves != expected then {
+        puts("步数不匹配: FAIL");
+        return 1;
+    }
+
+    puts("hanoi: OK");
+    return 0;
+}

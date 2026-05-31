@@ -1,0 +1,76 @@
+// bubble_sort.kang — 冒泡排序，原地排序并统计交换次数
+
+// 原地冒泡排序，返回交换次数
+def bubble_sort(arr:[i32]) -> i32 {
+    var n:i32 = len(arr);
+    var swaps:i32 = 0;
+    for var i:i32 = 0, i < n - 1, i = i + 1 in {
+        var swapped:bool = false;
+        for var j:i32 = 0, j < n - i - 1, j = j + 1 in {
+            var next:i32 = j + 1;
+            if arr[j] > arr[next] then {
+                var tmp:i32 = arr[j];
+                arr[j] = arr[next];
+                arr[next] = tmp;
+                swaps = swaps + 1;
+                swapped = true;
+            }
+        }
+        if !swapped then {
+            // 提前终止: 本轮无交换，已有序
+            i = n;
+        }
+    }
+    return swaps;
+}
+
+def is_sorted(arr:[i32]) -> bool {
+    for var i:i32 = 0, i < len(arr) - 1, i = i + 1 in {
+        if arr[i] > arr[i + 1] then {
+            return false;
+        }
+    }
+    return true;
+}
+
+def main() -> i32 {
+    var arr:[i32] = [64, 34, 25, 12, 22, 11, 90];
+    var original:str = "";
+    for var i:i32 = 0, i < len(arr), i = i + 1 in {
+        original = original + str(arr[i]);
+        if i < len(arr) - 1 then { original = original + ", "; }
+    }
+
+    var s:i32 = bubble_sort(arr);
+
+    // 验证有序
+    if !is_sorted(arr) then {
+        puts("排序检测: FAIL");
+        return 1;
+    }
+
+    // 验证具体值: [11, 12, 22, 25, 34, 64, 90]
+    if arr[0] != 11 then { puts("arr[0]: FAIL"); return 1; }
+    if arr[3] != 25 then { puts("arr[3]: FAIL"); return 1; }
+    if arr[6] != 90 then { puts("arr[6]: FAIL"); return 1; }
+
+    // 对一个基本有序的数组排序，验证提前终止
+    var nearly_sorted:[i32] = [1, 2, 3, 5, 4];
+    var s2:i32 = bubble_sort(nearly_sorted);
+    if !is_sorted(nearly_sorted) then {
+        puts("近乎有序排序: FAIL");
+        return 1;
+    }
+
+    puts("排序前: " + original);
+    var sorted:str = "";
+    for var i:i32 = 0, i < len(arr), i = i + 1 in {
+        sorted = sorted + str(arr[i]);
+        if i < len(arr) - 1 then { sorted = sorted + ", "; }
+    }
+    puts("排序后: " + sorted);
+    var msg:str = "交换次数: " + str(s) + " (主数组), " + str(s2) + " (近乎有序)";
+    puts(msg);
+    puts("bubble_sort: OK");
+    return 0;
+}
