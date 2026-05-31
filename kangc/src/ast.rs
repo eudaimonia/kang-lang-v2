@@ -435,10 +435,32 @@ impl fmt::Display for FuncDef {
     }
 }
 
+// 模块导入语句 (M7)
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportStmt {
+    pub alias: String,
+    pub items: Vec<String>,
+    pub path: String,
+}
+
+impl fmt::Display for ImportStmt {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "(import \"{}\" [", self.alias)?;
+        if let Some((first, rest)) = self.items.split_first() {
+            write!(f, "{}", first)?;
+            for item in rest {
+                write!(f, " {}", item)?;
+            }
+        }
+        write!(f, "] from {:?})", self.path)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TopLevel {
     Struct(StructDef),
     Func(FuncDef),
+    Import(ImportStmt),
 }
 
 impl fmt::Display for TopLevel {
@@ -446,6 +468,7 @@ impl fmt::Display for TopLevel {
         match self {
             TopLevel::Struct(s) => write!(f, "{}", s),
             TopLevel::Func(func) => write!(f, "{}", func),
+            TopLevel::Import(i) => write!(f, "{}", i),
         }
     }
 }
@@ -777,5 +800,50 @@ mod tests {
     #[test]
     fn display_basetype_user() {
         assert_eq!(format!("{}", BaseType::UserDef("MyType".into())), "MyType");
+    }
+
+    // ── ImportStmt Display ───────────────────────────────────────────────
+
+    #[test]
+    fn display_import_single() {
+        let imp = ImportStmt {
+            alias: "m".into(),
+            items: vec!["add".into()],
+            path: "./math.kang".into(),
+        };
+        assert_eq!(format!("{}", imp), "(import \"m\" [add] from \"./math.kang\")");
+    }
+
+    #[test]
+    fn display_import_multi() {
+        let imp = ImportStmt {
+            alias: "m".into(),
+            items: vec!["add".into(), "sub".into()],
+            path: "./math.kang".into(),
+        };
+        let out = format!("{}", imp);
+        assert!(out.contains("import \"m\" [add sub]"), "output: {}", out);
+    }
+
+    #[test]
+    fn display_program_with_import() {
+        let p = Program {
+            items: vec![
+                TopLevel::Import(ImportStmt {
+                    alias: "m".into(),
+                    items: vec!["f".into()],
+                    path: "./lib.kang".into(),
+                }),
+                TopLevel::Func(FuncDef {
+                    name: "main".into(),
+                    params: vec![],
+                    return_type: ReturnType::Single(Type::Base(BaseType::I32)),
+                    body: vec![],
+                }),
+            ],
+        };
+        let out = format!("{}", p);
+        assert!(out.contains("(import"), "output: {}", out);
+        assert!(out.contains("func-def"), "output: {}", out);
     }
 }

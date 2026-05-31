@@ -78,7 +78,7 @@ pub fn compile_to_stage(
 
     // Semantic
     let mut sem_stats = SemanticStats::default();
-    let typed = match semantic::check(&program, &mut sem_stats) {
+    let typed = match semantic::check(&program, &mut sem_stats, file_path) {
         Ok(tp) => tp,
         Err(errors) => return Err(KangError::Semantic(errors.into_iter().next().unwrap())),
     };
@@ -92,8 +92,12 @@ pub fn compile_to_stage(
     }
 
     // Codegen
+    let module_name = std::path::Path::new(file_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("kang_module");
     let mut cg_stats = CodeGenStats::default();
-    let cg_result = codegen(&typed, &mut cg_stats, target_triple, object_path).map_err(KangError::CodeGen)?;
+    let cg_result = codegen::codegen(&typed, &mut cg_stats, target_triple, object_path, module_name).map_err(KangError::CodeGen)?;
 
     let stats = CompilerStats {
         source: source_stats, lex: lex_stats, parse: parse_stats, semantic: sem_stats, codegen: cg_stats,
@@ -120,8 +124,8 @@ pub fn parse(tokens: &[lexer::Token], stats: &mut ParseStats) -> Result<ast::Pro
 }
 
 /// 语义分析: AST → TypedProgram
-pub fn check(program: &ast::Program, stats: &mut SemanticStats) -> Result<semantic::TypedProgram, Vec<SemanticError>> {
-    semantic::check(program, stats)
+pub fn check(program: &ast::Program, stats: &mut SemanticStats, file_path: &str) -> Result<semantic::TypedProgram, Vec<SemanticError>> {
+    semantic::check(program, stats, file_path)
 }
 
 /// 代码生成: TypedProgram → CodeGenResult
@@ -131,7 +135,7 @@ pub fn codegen(
     target_triple: Option<&str>,
     object_path: Option<&Path>,
 ) -> Result<CodeGenResult, CodeGenError> {
-    codegen::codegen(program, stats, target_triple, object_path)
+    codegen::codegen(program, stats, target_triple, object_path, "kang_module")
 }
 
 /// 编译全流程: 源码 → 语义检查后的 TypedProgram + IR
@@ -152,11 +156,15 @@ pub fn compile_full(
 
     let tokens = tokenize(source, &mut lex_stats).map_err(KangError::Lex)?;
     let program = parse_tokens(&tokens, &mut parse_stats).map_err(KangError::Parse)?;
-    let typed = match semantic::check(&program, &mut sem_stats) {
+    let typed = match semantic::check(&program, &mut sem_stats, file_path) {
         Ok(tp) => tp,
         Err(errors) => return Err(KangError::Semantic(errors.into_iter().next().unwrap())),
     };
-    let result = codegen(&typed, &mut cg_stats, None, None).map_err(KangError::CodeGen)?;
+    let module_name = std::path::Path::new(file_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("kang_module");
+    let result = codegen::codegen(&typed, &mut cg_stats, None, None, module_name).map_err(KangError::CodeGen)?;
 
     Ok((typed, result, source_stats, lex_stats, parse_stats, sem_stats, cg_stats))
 }

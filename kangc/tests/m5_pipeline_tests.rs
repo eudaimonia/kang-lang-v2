@@ -171,8 +171,11 @@ fn object_file_is_valid_macho() {
 /// 需要先 `cargo build -p kangc` 构建二进制，然后运行:
 /// `cargo test -p kangc --test m5_pipeline_tests -- --ignored`
 fn kang_run_e2e(source: &str) -> (String, String, i32) {
-    let mut src_file = std::env::temp_dir().join("test_e2e.kang");
-    src_file.set_file_name(format!("test_e2e_{}.kang", std::process::id()));
+    let id: u64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let src_file = std::env::temp_dir().join(format!("test_e2e_{}.kang", id));
     std::fs::write(&src_file, source).unwrap();
 
     let exe_path = src_file.with_extension("");
@@ -223,4 +226,91 @@ fn e2e_arithmetic() {
     let (stdout, stderr, exit_code) = kang_run_e2e(source);
     assert_eq!(exit_code, 0, "应成功退出, stderr: {}", stderr);
     assert!(stdout.contains("42"), "应输出 42, got: '{}', stderr: '{}'", stdout, stderr);
+}
+
+// ── M7 多文件编译集成测试 ──────────────────────────────────────────────────
+
+/// 创建临时测试目录，包含多个 .kang 源文件，运行 CLI 编译执行
+fn kang_run_multi(sources: &[(&str, &str)], main_file: &str) -> (String, String, i32) {
+    // 确保目录名唯一，防止并行测试冲突
+    let id: u64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("test_m7_{}", id));
+    let _ = std::fs::create_dir_all(&dir);
+
+    for (name, content) in sources {
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+    }
+
+    let main_path = dir.join(main_file);
+
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+
+    let output = Command::new("cargo")
+        .args(["run", "-q", "-p", "kangc", "--", "run", main_path.to_str().unwrap()])
+        .current_dir(workspace_root)
+        .output()
+        .unwrap();
+
+    // 清理
+    let _ = std::fs::remove_dir_all(&dir);
+
+    (
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+        output.status.code().unwrap_or(-1),
+    )
+}
+
+#[test]
+#[ignore]
+fn e2e_m7_simple_import() {
+    let sources = [
+        ("math.kang", "def add(a:i32, b:i32) -> i32 { return a + b; }\ndef sub(a:i32, b:i32) -> i32 { return a - b; }\n"),
+        ("main.kang", "import m { add, sub } from \"./math.kang\";\ndef main() -> i32 {\n    var x:i32 = m.add(10, 20);\n    var y:i32 = m.sub(x, 5);\n    puts(str(y));\n    return 0;\n}\n"),
+    ];
+    let (stdout, stderr, exit_code) = kang_run_multi(&sources, "main.kang");
+    assert_eq!(exit_code, 0, "应成功退出, stderr: {}", stderr);
+    assert!(stdout.contains("25"), "应输出 25, got: '{}'", stdout);
+}
+
+#[test]
+#[ignore]
+fn e2e_m7_multi_module() {
+    let sources = [
+        ("mod1.kang", "def one() -> i32 { return 1; }\n"),
+        ("mod2.kang", "def two() -> i32 { return 2; }\n"),
+        ("main.kang", "import a { one } from \"./mod1.kang\";\nimport b { two } from \"./mod2.kang\";\ndef main() -> i32 {\n    var x:i32 = a.one() + b.two();\n    puts(str(x));\n    return 0;\n}\n"),
+    ];
+    let (stdout, stderr, exit_code) = kang_run_multi(&sources, "main.kang");
+    assert_eq!(exit_code, 0, "应成功退出, stderr: {}", stderr);
+    assert!(stdout.contains("3"), "应输出 3, got: '{}'", stdout);
+}
+
+#[test]
+#[ignore]
+fn e2e_m7_import_error_file_not_found() {
+    let sources = [
+        ("main.kang", "import m { add } from \"./nonexistent.kang\";\ndef main() -> i32 { return 0; }\n"),
+    ];
+    let (_stdout, stderr, exit_code) = kang_run_multi(&sources, "main.kang");
+    assert_ne!(exit_code, 0, "应失败退出");
+    assert!(stderr.contains("无法找到导入文件"), "应报告文件不存在, stderr: {}", stderr);
+}
+
+#[test]
+#[ignore]
+fn e2e_m7_import_error_item_not_found() {
+    let sources = [
+        ("lib.kang", "def real_func() -> i32 { return 1; }\n"),
+        ("main.kang", "import m { nonexistent } from \"./lib.kang\";\ndef main() -> i32 { return 0; }\n"),
+    ];
+    let (_stdout, stderr, exit_code) = kang_run_multi(&sources, "main.kang");
+    assert_ne!(exit_code, 0, "应失败退出");
+    assert!(stderr.contains("未找到"), "应报告未找到, stderr: {}", stderr);
 }

@@ -24,6 +24,8 @@ pub enum TokenKind {
     #[token("for")]    For,
     #[token("in")]     In,
     #[token("struct")] Struct,
+    #[token("import")] Import,
+    #[token("from")]   From,
 
     // 类型关键字
     #[token("i32")]  TI32,
@@ -237,6 +239,8 @@ fn token_lexeme(t: &Token) -> String {
         TokenKind::For => "for".into(),
         TokenKind::In => "in".into(),
         TokenKind::Struct => "struct".into(),
+        TokenKind::Import => "import".into(),
+        TokenKind::From => "from".into(),
         TokenKind::TI32 => "i32".into(),
         TokenKind::TF64 => "f64".into(),
         TokenKind::TStr => "str".into(),
@@ -336,6 +340,8 @@ mod tests {
     #[test] fn lex_for()    { assert_eq!(first_kind("for"), TokenKind::For); }
     #[test] fn lex_in()     { assert_eq!(first_kind("in"), TokenKind::In); }
     #[test] fn lex_struct() { assert_eq!(first_kind("struct"), TokenKind::Struct); }
+    #[test] fn lex_import() { assert_eq!(first_kind("import"), TokenKind::Import); }
+    #[test] fn lex_from()   { assert_eq!(first_kind("from"), TokenKind::From); }
 
     // ── 类型关键字 ───────────────────────────────────────────────────────
 
@@ -551,6 +557,23 @@ mod tests {
             TokenKind::LBrace, TokenKind::RBrace,
             TokenKind::Comma, TokenKind::Colon,
             TokenKind::Semi, TokenKind::Dot,
+            TokenKind::Eof,
+        ];
+        assert_eq!(kinds, expected);
+    }
+
+    #[test]
+    fn lex_import_statement() {
+        let kinds = tokenize_kinds("import m { add } from \"./math.kang\";");
+        let expected = vec![
+            TokenKind::Import,
+            TokenKind::Ident("m".into()),
+            TokenKind::LBrace,
+            TokenKind::Ident("add".into()),
+            TokenKind::RBrace,
+            TokenKind::From,
+            TokenKind::StrLit("./math.kang".into()),
+            TokenKind::Semi,
             TokenKind::Eof,
         ];
         assert_eq!(kinds, expected);

@@ -11,6 +11,22 @@ use crate::error::SemanticError;
 use std::collections::HashMap;
 use std::ops::Range;
 
+/// 解析 import 路径: 相对于当前文件所在目录，或绝对路径
+fn resolve_module_path(path: &str, current_file: Option<&str>) -> std::path::PathBuf {
+    let raw = std::path::PathBuf::from(path);
+    if raw.is_absolute() {
+        return raw;
+    }
+    if let Some(file) = current_file {
+        let parent = std::path::Path::new(file)
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
+        parent.join(path)
+    } else {
+        raw
+    }
+}
+
 // ── Checker ────────────────────────────────────────────────────────────────────
 
 pub struct Checker {
@@ -22,10 +38,13 @@ pub struct Checker {
     current_func_return: KangType,
     current_func_name: String,
     in_loop: bool,
+    source_file: Option<String>,
+    /// alias → module_name 映射（如 m → math），用于解析 import 调用的代码生成名称
+    alias_modules: HashMap<String, String>,
 }
 
 impl Checker {
-    pub fn new() -> Self {
+    pub fn new(file_path: Option<&str>) -> Self {
         Checker {
             symbols: SymbolTable::new(),
             structs: HashMap::new(),
@@ -35,6 +54,8 @@ impl Checker {
             current_func_return: KangType::Void,
             current_func_name: String::new(),
             in_loop: false,
+            source_file: file_path.map(|s| s.to_string()),
+            alias_modules: HashMap::new(),
         }
     }
 
@@ -72,6 +93,9 @@ impl Checker {
                     let typed_func = self.check_func_def(func);
                     items.push(TypedTopLevel::Func(typed_func));
                 }
+                ast::TopLevel::Import(_) => {
+                    // import 语句由模块系统单独处理，语义检查中跳过
+                }
             }
         }
 
@@ -92,6 +116,86 @@ impl Checker {
                 }
                 ast::TopLevel::Func(f) => {
                     self.register_func_decl(f);
+                }
+                ast::TopLevel::Import(imp) => {
+                    // 注册导入模块的符号（由模块系统解析后调用）
+                    self.register_import_decl(imp);
+                }
+            }
+        }
+    }
+
+    /// 注册导入项的符号声明
+    fn register_import_decl(&mut self, imp: &ast::ImportStmt) {
+        let import_path = resolve_module_path(&imp.path, self.source_file.as_deref());
+
+        let source = match std::fs::read_to_string(&import_path) {
+            Ok(s) => s,
+            Err(_) => {
+                self.errors.push(SemanticError {
+                    msg: format!("无法找到导入文件: {}", imp.path),
+                    line: 0, col: 0, span: 0..0,
+                });
+                return;
+            }
+        };
+        let mut lex_stats = crate::stats::LexStats::default();
+        let tokens = match crate::lexer::tokenize(&source, &mut lex_stats) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        let mut parse_stats = crate::stats::ParseStats::default();
+        let imported_program = match crate::parser::parse(&tokens, &mut parse_stats) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        for item_name in &imp.items {
+            let found = imported_program.items.iter().find(|item| match item {
+                ast::TopLevel::Func(f) => &f.name == item_name,
+                ast::TopLevel::Struct(s) => &s.name == item_name,
+                ast::TopLevel::Import(_) => false,
+            });
+
+            // 语义查找名（用户侧），代码生成用原名（链接时符号匹配）
+            let semantic_name = format!("{}.{}", imp.alias, item_name);
+
+            match found {
+                Some(ast::TopLevel::Func(f)) => {
+                    let params: Vec<(String, KangType)> = f.params.iter().map(|(n, t)|
+                        (n.clone(), KangType::from_ast_type(t))
+                    ).collect();
+                    let ret = KangType::from_ast_return_type(&f.return_type);
+                    let sig = super::scope::FuncSignature {
+                        params,
+                        return_type: ret,
+                        is_builtin: false,
+                        overloads: vec![],
+                    };
+                    let _ = self.symbols.insert(
+                        &semantic_name,
+                        super::scope::SymbolKind::Function(sig),
+                        super::scope::ScopeHint::Normal,
+                    );
+                    // 记录 semantic_name → 原名 映射，供 check_call 生成代码名
+                    self.alias_modules.insert(semantic_name.clone(), item_name.clone());
+                }
+                Some(ast::TopLevel::Struct(s)) => {
+                    let fields: Vec<(String, KangType)> = s.fields.iter().map(|(n, t)|
+                        (n.clone(), KangType::from_ast_type(t))
+                    ).collect();
+                    self.structs.insert(semantic_name.clone(), super::scope::StructInfo { fields: fields.clone() });
+                    let _ = self.symbols.insert(
+                        &semantic_name,
+                        super::scope::SymbolKind::Struct(super::scope::StructInfo { fields }),
+                        super::scope::ScopeHint::Normal,
+                    );
+                }
+                _ => {
+                    self.errors.push(SemanticError {
+                        msg: format!("模块 \"{}\" 中未找到 \"{}\"", imp.path, item_name),
+                        line: 0, col: 0, span: 0..0,
+                    });
                 }
             }
         }
@@ -894,11 +998,30 @@ impl Checker {
 
     // 函数调用
     fn check_call(&mut self, func: &ast::Expr, args: &[ast::Expr], span: Range<usize>) -> TypedExpr {
-        // 提取函数名
-        let func_name = match func {
-            ast::Expr::Ident(name, ..) => name.clone(),
+        // 提取函数名，支持直接调用和 module.func 导入调用
+        // lookup_name: 符号表查找用 (如 m.add)
+        // codegen_name: 代码生成用 (如 add，即导入模块中的原名)
+        let (lookup_name, codegen_name) = match func {
+            ast::Expr::Ident(name, ..) => (name.clone(), name.clone()),
+            ast::Expr::FieldAccess { obj, field, .. } => {
+                match obj.as_ref() {
+                    ast::Expr::Ident(alias, ..) => {
+                        let semantic_name = format!("{}.{}", alias, field);
+                        // 如果是 import 的函数，用原名查符号表，用原名生成代码
+                        let codegen = self.alias_modules.get(&semantic_name).cloned().unwrap_or(semantic_name.clone());
+                        (semantic_name, codegen)
+                    }
+                    _ => {
+                        self.error("调用目标必须是函数名或 module.func", "", span);
+                        return TypedExpr {
+                            kind: TypedExprKind::Call { func_name: "<unknown>".into(), args: vec![] },
+                            ty: KangType::I32,
+                        };
+                    }
+                }
+            }
             _ => {
-                self.error("调用目标必须是函数名", "", span);
+                self.error("调用目标必须是函数名或 module.func", "", span);
                 return TypedExpr {
                     kind: TypedExprKind::Call { func_name: "<unknown>".into(), args: vec![] },
                     ty: KangType::I32,
@@ -911,15 +1034,15 @@ impl Checker {
         let arg_types: Vec<KangType> = typed_args.iter().map(|a| a.ty.clone()).collect();
 
         // 特殊处理: 内置泛型函数
-        if func_name == "len" {
-            return self.check_builtin_len(&func_name, &typed_args, &arg_types, span);
+        if lookup_name == "len" {
+            return self.check_builtin_len(&codegen_name, &typed_args, &arg_types, span);
         }
-        if func_name == "push" {
-            return self.check_builtin_push(&func_name, &typed_args, &arg_types, span);
+        if lookup_name == "push" {
+            return self.check_builtin_push(&codegen_name, &typed_args, &arg_types, span);
         }
 
-        // 查找函数签名（提取数据避免 borrow checker 冲突）
-        let sig_data = self.symbols.lookup_function(&func_name, &arg_types)
+        // 查找函数签名（用语义名查符号表）
+        let sig_data = self.symbols.lookup_function(&lookup_name, &arg_types)
             .map(|sig| (sig.params.clone(), sig.return_type.clone(), sig.params.len()));
 
         match sig_data {
@@ -929,7 +1052,7 @@ impl Checker {
                     self.error(
                         &format!(
                             "函数 \"{}\" 参数数量不匹配: 期望 {} 个，传入 {} 个 (F4/F5)",
-                            func_name,
+                            lookup_name,
                             param_count,
                             arg_types.len()
                         ),
@@ -947,7 +1070,7 @@ impl Checker {
                         self.error(
                             &format!(
                                 "函数 \"{}\" 第 {} 个参数类型不匹配: 期望 {}，传入 {} (F6)",
-                                func_name,
+                                lookup_name,
                                 i + 1,
                                 pt,
                                 effective_at
@@ -961,17 +1084,17 @@ impl Checker {
 
                 TypedExpr {
                     kind: TypedExprKind::Call {
-                        func_name: func_name.clone(),
+                        func_name: codegen_name.clone(),
                         args: typed_args,
                     },
                     ty: return_type,
                 }
             }
             None => {
-                self.error(&format!("未定义的函数 \"{}\"", func_name), &func_name, span);
+                self.error(&format!("未定义的函数 \"{}\"", lookup_name), &lookup_name, span);
                 TypedExpr {
                     kind: TypedExprKind::Call {
-                        func_name: func_name.clone(),
+                        func_name: codegen_name.clone(),
                         args: typed_args,
                     },
                     ty: KangType::I32,

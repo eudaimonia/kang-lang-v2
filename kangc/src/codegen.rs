@@ -23,9 +23,10 @@ pub fn codegen(
     stats: &mut CodeGenStats,
     target_triple: Option<&str>,
     object_path: Option<&Path>,
+    module_name: &str,
 ) -> Result<CodeGenResult, CodeGenError> {
     let llvm_context = Context::create();
-    let mut ctx = CodeGenContext::new(&llvm_context, "kang_module", target_triple);
+    let mut ctx = CodeGenContext::new(&llvm_context, module_name, target_triple);
 
     // 声明所有内置函数
     builtins::declare_all(&mut ctx);
@@ -42,7 +43,7 @@ pub fn codegen(
         }
     }
 
-    // 生成函数
+    // 生成函数（使用 TypedExpr 中的原始名称，代码生成名由语义分析设定）
     for item in &program.items {
         if let TypedTopLevel::Func(func) = item {
             codegen_func(&mut ctx, &func.name, &func.params, &func.return_type, &func.body)?;
@@ -199,8 +200,8 @@ mod tests {
 
         let tokens = lexer::tokenize(source, &mut lex_stats).expect("lex");
         let program = parser::parse(&tokens, &mut parse_stats).expect("parse");
-        let typed = semantic::check(&program, &mut sem_stats).expect("check");
-        codegen(&typed, &mut cg_stats, None, None).expect("codegen").ir_text
+        let typed = semantic::check(&program, &mut sem_stats, "<test>").expect("check");
+        codegen(&typed, &mut cg_stats, None, None, "test").expect("codegen").ir_text
     }
 
     #[test]
@@ -282,7 +283,7 @@ mod tests {
 
             let tokens = lexer::tokenize(&source, &mut lex_stats).unwrap();
             let program = parser::parse(&tokens, &mut parse_stats).unwrap();
-            let typed = match semantic::check(&program, &mut sem_stats) {
+            let typed = match semantic::check(&program, &mut sem_stats, &path.to_string_lossy()) {
                 Ok(tp) => tp,
                 Err(errors) => {
                     // 某些语法测试文件可能有语义错误（如 03_expressions）
@@ -294,7 +295,7 @@ mod tests {
                 }
             };
 
-            match codegen(&typed, &mut cg_stats, None, None) {
+            match codegen(&typed, &mut cg_stats, None, None, "test") {
                 Ok(result) => {
                     assert!(!result.ir_text.is_empty(), "{}: IR 不应为空", file);
                     assert!(result.ir_text.contains("source_filename"), "{}: IR 应包含 source_filename", file);

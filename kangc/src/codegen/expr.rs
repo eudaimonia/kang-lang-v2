@@ -403,7 +403,11 @@ fn codegen_call<'ctx>(
         .module
         .get_function(&resolved_name)
         .or_else(|| ctx.lookup_func(&resolved_name))
-        .ok_or_else(|| CodeGenError { msg: format!("函数 {} 未声明", resolved_name) })?;
+        .unwrap_or_else(|| {
+            // 跨模块调用: 声明为外部函数，链接时解析
+            let arg_kang_types: Vec<KangType> = args.iter().map(|a| a.ty.clone()).collect();
+            ctx.declare_func(&resolved_name, &arg_kang_types, return_ty)
+        });
 
     // C ABI 外部函数：将 Kang 复合类型展平为标量参数
     let llvm_args: Vec<BasicMetadataValueEnum> = if func.get_first_basic_block().is_none() {

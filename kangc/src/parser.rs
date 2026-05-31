@@ -120,8 +120,13 @@ impl<'a> Parser<'a> {
             TokenKind::TBool => { self.advance(); Ok(BaseType::Bool) }
             TokenKind::TVoid => { self.advance(); Ok(BaseType::Void) }
             TokenKind::Ident(name) => {
-                let n = name.clone();
+                let mut n = name.clone();
                 self.advance();
+                // 支持 module.Type 形式的导入类型引用
+                if self.match_kw(&TokenKind::Dot) {
+                    let suffix = self.expect_ident()?;
+                    n = format!("{}.{}", n, suffix);
+                }
                 Ok(BaseType::UserDef(n))
             }
             _ => Err(self.error(format!("期望类型，但得到 {:?}", self.peek_kind()))),
@@ -306,8 +311,25 @@ impl<'a> Parser<'a> {
             TokenKind::True => { self.advance(); Ok(Expr::BoolLit(true, self.current_span())) }
             TokenKind::False => { self.advance(); Ok(Expr::BoolLit(false, self.current_span())) }
             TokenKind::Ident(name) => {
-                let n = name.clone();
+                let mut n = name.clone();
                 self.advance();
+                // 支持 module.Type 形式, 用于结构体构造: module.Type{...}
+                if self.peek_kind() == &TokenKind::Dot {
+                    let saved_pos = self.pos;
+                    self.advance(); // consume .
+                    if let TokenKind::Ident(suffix) = self.peek_kind() {
+                        let suffix = suffix.clone();
+                        self.advance();
+                        if self.peek_kind() == &TokenKind::LBrace {
+                            n = format!("{}.{}", n, suffix);
+                            return self.parse_struct_lit_tail(&n);
+                        }
+                        // 不是 struct lit, 回退: 返回 Ident, 让 postfix 解析 .field
+                        self.pos = saved_pos;
+                    } else {
+                        self.pos = saved_pos;
+                    }
+                }
                 // 判断是否为结构体构造: Name { ... }
                 if self.peek_kind() == &TokenKind::LBrace {
                     self.parse_struct_lit_tail(&n)
@@ -600,6 +622,38 @@ impl<'a> Parser<'a> {
         Ok((name, ty))
     }
 
+    // ImportStmt = "import" IDENT "{" ImportItems "}" "from" STR_LIT ";"
+    fn parse_import_stmt(&mut self) -> Result<ImportStmt, ParseError> {
+        self.expect(&TokenKind::Import)?;
+        let alias = self.expect_ident()?;
+        self.expect(&TokenKind::LBrace)?;
+        let items = self.parse_import_items()?;
+        self.expect(&TokenKind::RBrace)?;
+        self.expect(&TokenKind::From)?;
+        let path = match self.peek_kind() {
+            TokenKind::StrLit(s) => {
+                let p = s.clone();
+                self.advance();
+                p
+            }
+            _ => return Err(self.error(format!("期望字符串路径，但得到 {:?}", self.peek_kind()))),
+        };
+        self.expect(&TokenKind::Semi)?;
+        Ok(ImportStmt { alias, items, path })
+    }
+
+    // ImportItems = ImportItem { "," ImportItem }
+    fn parse_import_items(&mut self) -> Result<Vec<String>, ParseError> {
+        if self.peek_kind() == &TokenKind::RBrace {
+            return Ok(vec![]);
+        }
+        let mut items = vec![self.expect_ident()?];
+        while self.match_kw(&TokenKind::Comma) {
+            items.push(self.expect_ident()?);
+        }
+        Ok(items)
+    }
+
     // Program = { TopLevel }
     fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut items = Vec::new();
@@ -607,9 +661,10 @@ impl<'a> Parser<'a> {
             let item = match self.peek_kind() {
                 TokenKind::Struct => TopLevel::Struct(self.parse_struct_def()?),
                 TokenKind::Def => TopLevel::Func(self.parse_func_def()?),
+                TokenKind::Import => TopLevel::Import(self.parse_import_stmt()?),
                 _ => {
                     return Err(self.error(format!(
-                        "期望 struct 或 def，但得到 {:?}",
+                        "期望 struct、def 或 import，但得到 {:?}",
                         self.peek_kind()
                     )));
                 }
@@ -709,6 +764,7 @@ fn ast_depth(program: &Program) -> usize {
             TopLevel::Func(f) => {
                 2 + f.body.iter().map(|s| stmt_depth(s)).max().unwrap_or(0)
             }
+            TopLevel::Import(_) => 1, // import 单节点
         }
     }).max().unwrap_or(0)
 }
@@ -723,6 +779,7 @@ fn count_nodes(program: &Program) -> HashMap<String, usize> {
                 *counts.entry("func-def".into()).or_insert(0) += 1;
                 count_stmt_nodes(&f.body, &mut counts);
             }
+            TopLevel::Import(_) => *counts.entry("import".into()).or_insert(0) += 1,
         }
     }
     counts
@@ -845,6 +902,7 @@ pub fn parse(tokens: &[Token], stats: &mut ParseStats) -> Result<Program, ParseE
 pub enum LineResult {
     FuncDef(FuncDef),
     StructDef(StructDef),
+    Import(ImportStmt),
     Stmt(Stmt),
     /// 裸表达式 — REPL 求值后打印结果
     Expr(Expr),
@@ -900,13 +958,16 @@ pub fn parse_line(tokens: &[Token]) -> Result<LineResult, ParseError> {
 
     let mut parser = Parser::new(tokens);
 
-    // def / struct 声明
+    // def / struct / import 声明
     match parser.peek_kind() {
         TokenKind::Def => {
             return Ok(LineResult::FuncDef(parser.parse_func_def()?));
         }
         TokenKind::Struct => {
             return Ok(LineResult::StructDef(parser.parse_struct_def()?));
+        }
+        TokenKind::Import => {
+            return Ok(LineResult::Import(parser.parse_import_stmt()?));
         }
         TokenKind::Var | TokenKind::Return | TokenKind::If |
         TokenKind::For | TokenKind::LBrace => {
@@ -1560,6 +1621,55 @@ mod tests {
         assert_eq!(p.items.len(), 3);
     }
 
+    #[test]
+    fn top_import_single() {
+        let p = parse_source("import m { add } from \"./math.kang\";").unwrap();
+        assert_eq!(p.items.len(), 1);
+        match &p.items[0] {
+            TopLevel::Import(i) => {
+                assert_eq!(i.alias, "m");
+                assert_eq!(i.items, vec!["add"]);
+                assert_eq!(i.path, "./math.kang");
+            }
+            _ => panic!("expected import"),
+        }
+    }
+
+    #[test]
+    fn top_import_multi_items() {
+        let p = parse_source("import m { add, sub, mul } from \"./math.kang\";").unwrap();
+        match &p.items[0] {
+            TopLevel::Import(i) => {
+                assert_eq!(i.alias, "m");
+                assert_eq!(i.items.len(), 3);
+            }
+            _ => panic!("expected import"),
+        }
+    }
+
+    #[test]
+    fn top_import_mixed_with_def() {
+        let p = parse_source("import m { f } from \"./lib.kang\"; def main() -> i32 { return 0; }").unwrap();
+        assert_eq!(p.items.len(), 2);
+        assert!(matches!(&p.items[0], TopLevel::Import(_)));
+        assert!(matches!(&p.items[1], TopLevel::Func(_)));
+    }
+
+    #[test]
+    fn error_import_in_body() {
+        // import 不可出现在函数体内
+        let result = parse_source("def f() -> void { import m { x } from \"./lib.kang\"; return; }");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn error_bad_assignment_target() {
+        // 42 = x; — 语法层会将 42 解析为表达式, 转左值时失败
+        let result = parse_stmt("42 = x;");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().msg.contains("赋值左侧"));
+    }
+
     // ── 嵌套结构 ─────────────────────────────────────────────────────────
 
     #[test]
@@ -1643,7 +1753,7 @@ mod tests {
     fn error_unexpected_token_at_top() {
         let result = parse_source("42");
         assert!(result.is_err());
-        assert!(result.unwrap_err().msg.contains("struct 或 def"));
+        assert!(result.unwrap_err().msg.contains("struct"));
     }
 
     #[test]
@@ -1656,14 +1766,6 @@ mod tests {
     fn error_wrong_close() {
         let result = parse_source("def f() -> void { return; ]");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn error_bad_assignment_target() {
-        // 42 = x; — 语法层会将 42 解析为表达式, 转左值时失败
-        let result = parse_stmt("42 = x;");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().msg.contains("赋值左侧"));
     }
 
     #[test]

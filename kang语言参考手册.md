@@ -242,6 +242,31 @@ t.lexeme = "else";
 t.line = t.line + 1;
 ```
 
+### 模块导入
+
+```kang
+// 导入其他文件中的顶层定义
+// 语法: import alias { item1, item2 } from "path/file.kang";
+import math { add, sub } from "./math.kang";
+import io { puts, read_file } from "../io/utils.kang";
+
+// 通过 alias.item 访问导入项
+def main() -> i32 {
+    var result:i32 = math.add(1, 2);
+    io.puts(str(result));
+    return 0;
+}
+```
+
+**规则**:
+- `import` 语句仅限顶层，不可出现在函数体内
+- `alias` 为命名空间前缀，导入后通过 `alias.item` 访问
+- `{ }` 内列出需要导入的顶层函数名或结构体名，逗号分隔
+- 路径相对于当前源文件所在目录解析
+- 所有顶层项默认可导入，无需 `pub`/`priv` 修饰符
+- 被导入模块独立编译，链接期合并
+- 循环导入通过分离编译支持
+
 ### 入口点
 
 ```kang
@@ -497,7 +522,7 @@ def move_right(p:Point, dx:f64) -> Point {
 ## 7. 限制与注意事项
 
 1. **无指针**: 所有数据通过值和 Arena 管理，无手动内存操作
-2. **无模块系统 (v1)**: 单文件程序，所有定义位于顶层
+2. **模块系统**: 支持 `import alias { items } from "path"` 跨文件导入，编译单元分离编译 + 链接
 3. **无 break/continue (v1)**: 循环退出须通过条件判断
 4. **无泛型**: 每种类型组合需要各自处理
 5. **无闭包/lambda**: 函数不能嵌套定义，不能捕获外部变量
@@ -526,3 +551,128 @@ def move_right(p:Point, dx:f64) -> Point {
 | undefined behavior | **零 UB**: panic 或 wrapping |
 | 错误处理哨兵 | 多返回值 `(T, bool)` |
 | 隐式类型转换 | 禁止 (除 str +) |
+| 单文件 | 多文件模块系统 + `import` |
+| 链接 | 分离编译 + 静态链接 |
+
+---
+
+## 9. 模块系统
+
+Kang v2 通过编译单元分离编译 + 静态链接实现跨文件代码组织。
+
+### 基本用法
+
+```kang
+// === math.kang ===
+def add(a:i32, b:i32) -> i32 {
+    return a + b;
+}
+
+def sub(a:i32, b:i32) -> i32 {
+    return a - b;
+}
+
+// === main.kang ===
+import m { add, sub } from "./math.kang";
+
+def main() -> i32 {
+    var x:i32 = m.add(1, 2);
+    var y:i32 = m.sub(5, 3);
+    puts(str(x + y));  // 输出 "5"
+    return 0;
+}
+```
+
+编译: `kang build main.kang` — 编译器自动发现依赖、编译 `math.kang`、链接所有 .o。
+
+### 导入语法
+
+```
+import alias { item1, item2, ... } from "path/file.kang";
+```
+
+- `alias`: 命名空间前缀，在当前文件中唯一
+- `{ }`: 显式导入列表，仅导入需要的顶层函数名或结构体名
+- `"path"`: 被导入文件的路径，相对于导入文件所在目录解析
+
+### 访问导入项
+
+```kang
+import lexer { Token, next_token } from "./lexer.kang";
+
+def main() -> i32 {
+    // 结构体类型通过 alias.TypeName 使用
+    var tok:lexer.Token = lexer.next_token();
+    var kind:i32 = tok.kind;
+    return 0;
+}
+```
+
+### 可见性规则
+
+- 所有顶层函数和结构体默认可导入，无需 `pub`/`priv` 修饰符
+- 导入方通过 `alias.item` 访问，当前文件的顶层项通过原名访问
+- 不存在"重导出"或"传递导入"——导入项仅在导入文件中可见
+
+### 编译模型
+
+```
+main.kang ──→ lex/parse/semantic/codegen ──→ main.o ──┐
+                                                        ├──→ link ──→ a.out
+math.kang ──→ lex/parse/semantic/codegen ──→ math.o ──┘
+```
+
+- 每个源文件独立编译为目标文件
+- 导入模块时，先编译被导入文件，再编译导入方
+- 链接阶段合并所有 .o + libkangrt.a
+
+### 循环导入
+
+循环导入通过分离编译支持：
+
+```kang
+// === a.kang ===
+import b { f } from "./b.kang";
+
+// === b.kang ===
+import a { g } from "./a.kang";
+```
+
+编译器策略：被导入模块的签名先注册到符号表，体在链接期解析。v1 不验证循环导入的正确性（由开发者保证），运行时行为由 LLVM 链接器决定。
+
+### 与 C 风格的对比
+
+| 概念 | C (#include) | Kang (import) |
+|------|-------------|---------------|
+| 包含方式 | 文本复制/粘贴 | 独立编译单元 + 符号链接 |
+| 命名空间 | 全局，易冲突 | `alias.item`，隔离 |
+| 依赖图 | 隐式（头文件链） | 显式导入列表 |
+| 接口/实现分离 | .h + .c | 不需要（统一源文件） |
+| 循环引用 | 需头文件保护 | 签名先注册 + 链接期解析 |
+
+### 自举示例
+
+Kang 编译器本身可由多个 Kang 源文件组成：
+
+```kang
+// === lexer.kang ===
+struct Token { kind: i32; lexeme: str; line: i32; }
+def lex(source:str) -> [Token] { ... }
+
+// === parser.kang ===
+import lex { Token } from "./lexer.kang";
+struct AstNode { kind: i32; children: [AstNode]; }
+def parse(tokens:[lex.Token]) -> AstNode { ... }
+
+// === main.kang ===
+import lex { lex } from "./lexer.kang";
+import parse { parse, AstNode } from "./parser.kang";
+// AstNode 可通过 parse.AstNode 访问
+
+def main() -> i32 {
+    var source:str = read_file("input.kang");
+    var tokens:[lex.Token] = lex.lex(source);
+    var ast:parse.AstNode = parse.parse(tokens);
+    return 0;
+}
+```

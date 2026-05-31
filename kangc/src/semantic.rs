@@ -16,9 +16,9 @@ pub use types::*;
 
 /// 对 AST 进行语义检查，返回类型标注的 TypedProgram
 /// 收集所有错误后一并返回（不因单条错误中断）
-pub fn check(program: &ast::Program, stats: &mut SemanticStats) -> Result<TypedProgram, Vec<SemanticError>> {
+pub fn check(program: &ast::Program, stats: &mut SemanticStats, file_path: &str) -> Result<TypedProgram, Vec<SemanticError>> {
     let start = Instant::now();
-    let mut checker = Checker::new();
+    let mut checker = Checker::new(Some(file_path));
 
     let result = checker.check_program(program);
 
@@ -80,7 +80,7 @@ mod tests {
             type_check_failures: 0,
         };
 
-        match check(&program, &mut semantic_stats) {
+        match check(&program, &mut semantic_stats, &path.to_string_lossy()) {
             Ok(_) => (0, vec![]),
             Err(errors) => (errors.len(), errors),
         }
@@ -240,7 +240,7 @@ mod tests {
                 type_check_failures: 0,
             };
 
-            match check(&program, &mut semantic_stats) {
+            match check(&program, &mut semantic_stats, &path.to_string_lossy()) {
                 Ok(_) => {} // 通过
                 Err(errors) => {
                     panic!(
