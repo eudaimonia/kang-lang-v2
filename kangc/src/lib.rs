@@ -13,7 +13,7 @@ pub mod stats;
 use error::{CodeGenError, KangError, LexError, ParseError, SemanticError};
 use lexer::tokenize as lex_tokenize;
 use parser::parse as parse_tokens;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use stats::{CodeGenResult, CodeGenStats, CompilerStats, LexStats, ParseStats, SemanticStats, SourceStats};
 
 // ── 管线阶段 ────────────────────────────────────────────────────────────────
@@ -80,7 +80,15 @@ pub fn compile_to_stage(
     let mut sem_stats = SemanticStats::default();
     let typed = match semantic::check(&program, &mut sem_stats, file_path) {
         Ok(tp) => tp,
-        Err(errors) => return Err(KangError::Semantic(errors.into_iter().next().unwrap())),
+        Err(errors) => {
+            let first = errors.into_iter().next().unwrap_or_else(|| SemanticError {
+                msg: "语义检查失败（无具体错误信息）".into(),
+                line: 0,
+                col: 0,
+                span: 0..0,
+            });
+            return Err(KangError::Semantic(first));
+        }
     };
     if stage == PipelineStage::TypedAst {
         let output = format!("{:?}", typed);
@@ -158,7 +166,15 @@ pub fn compile_full(
     let program = parse_tokens(&tokens, &mut parse_stats).map_err(KangError::Parse)?;
     let typed = match semantic::check(&program, &mut sem_stats, file_path) {
         Ok(tp) => tp,
-        Err(errors) => return Err(KangError::Semantic(errors.into_iter().next().unwrap())),
+        Err(errors) => {
+            let first = errors.into_iter().next().unwrap_or_else(|| SemanticError {
+                msg: "语义检查失败（无具体错误信息）".into(),
+                line: 0,
+                col: 0,
+                span: 0..0,
+            });
+            return Err(KangError::Semantic(first));
+        }
     };
     let module_name = std::path::Path::new(file_path)
         .file_stem()
@@ -167,4 +183,51 @@ pub fn compile_full(
     let result = codegen::codegen(&typed, &mut cg_stats, None, None, module_name).map_err(KangError::CodeGen)?;
 
     Ok((typed, result, source_stats, lex_stats, parse_stats, sem_stats, cg_stats))
+}
+
+// ── 链接器工具 ────────────────────────────────────────────────────────────────
+
+/// 可信链接器目录白名单
+pub const TRUSTED_LINKER_DIRS: &[&str] = &[
+    "/usr/bin",
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+];
+
+/// 从 PATH 环境变量中查找可执行文件，返回绝对路径
+pub fn resolve_from_path(bin: &str) -> Option<PathBuf> {
+    let path_var = std::env::var("PATH").ok()?;
+    for dir in path_var.split(':') {
+        let full = PathBuf::from(dir).join(bin);
+        if full.is_file() {
+            return Some(full);
+        }
+    }
+    None
+}
+
+/// 获取并校验链接器路径，返回绝对路径或错误描述。
+///
+/// 供 CLI 和 REPL 共用，保持链接器安全策略一致。
+pub fn find_linker() -> Result<String, String> {
+    let linker = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let resolved = if linker.contains('/') {
+        PathBuf::from(&linker)
+    } else {
+        match resolve_from_path(&linker) {
+            Some(p) => p,
+            None => return Err(format!("无法在 PATH 中找到链接器 '{}'", linker)),
+        }
+    };
+    let canon = resolved.canonicalize().map_err(|e| {
+        format!("无法解析链接器路径 '{}': {}", resolved.display(), e)
+    })?;
+    let parent = canon.parent().unwrap_or(Path::new("/"));
+    if !TRUSTED_LINKER_DIRS.iter().any(|d| parent.starts_with(d)) {
+        return Err(format!(
+            "链接器 '{}' 不在可信目录中。请使用系统 cc 或设置 CC 为可信路径",
+            canon.display()
+        ));
+    }
+    Ok(canon.to_string_lossy().to_string())
 }

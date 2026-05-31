@@ -12,7 +12,7 @@ pub fn kang_type_to_basic<'ctx>(ctx: &CodeGenContext<'ctx>, ty: &KangType) -> Ba
         KangType::I32 => ctx.context.i32_type().into(),
         KangType::F64 => ctx.context.f64_type().into(),
         KangType::Bool => ctx.context.bool_type().into(),
-        KangType::Void => panic!("void 不可映射为 LLVM 基本类型 — 语义检查应拦截"),
+        KangType::Void => panic!("ICE: Void 类型不应到达代码生成阶段 — 语义检查未拦截"),
         KangType::Str => {
             let ptr_type = ctx.context.ptr_type(AddressSpace::default());
             let fields = vec![ptr_type.into(), ctx.context.i32_type().into()];
@@ -46,13 +46,26 @@ pub fn kang_type_to_basic<'ctx>(ctx: &CodeGenContext<'ctx>, ty: &KangType) -> Ba
 }
 
 /// 获取类型的对齐要求（字节）
+/// 优先使用 LLVM TargetData，回退到手动计算
 fn alignment_of(ctx: &CodeGenContext, ty: &KangType) -> u32 {
     match ty {
         KangType::I32 => 4,
         KangType::F64 => 8,
         KangType::Bool => 1,
-        KangType::Str | KangType::Array(_) => 8,
+        KangType::Str | KangType::Array(_) => {
+            if let Some(ref td) = ctx.target_data {
+                let llvm_ty = kang_type_to_basic(ctx, ty);
+                td.get_abi_alignment(&llvm_ty)
+            } else {
+                8 // {ptr, i32} 在 64 位上的对齐
+            }
+        }
         KangType::Struct(name) => {
+            if let Some(st) = ctx.struct_types.get(name) {
+                if let Some(ref td) = ctx.target_data {
+                    return td.get_abi_alignment(st as &dyn inkwell::types::AnyType);
+                }
+            }
             let fields = ctx.struct_fields
                 .get(name)
                 .expect("结构体应在代码生成前已注册");
@@ -61,18 +74,40 @@ fn alignment_of(ctx: &CodeGenContext, ty: &KangType) -> u32 {
                 .max()
                 .unwrap_or(8)
         }
-        KangType::Pair(t1, t2) => alignment_of(ctx, t1).max(alignment_of(ctx, t2)),
+        KangType::Pair(t1, t2) => {
+            if let Some(ref td) = ctx.target_data {
+                let llvm_ty = kang_type_to_basic(ctx, ty);
+                td.get_abi_alignment(&llvm_ty)
+            } else {
+                alignment_of(ctx, t1).max(alignment_of(ctx, t2))
+            }
+        }
         KangType::Void => 1,
     }
 }
 
 /// 获取 Kang 类型对应的 LLVM 存储大小（字节）
+/// 优先使用 LLVM TargetData 获取精确值，回退到手动布局计算
 pub fn size_of(ctx: &CodeGenContext, ty: &KangType) -> u32 {
+    // 简单标量类型：直接返回已知大小
     match ty {
-        KangType::I32 => 4,
-        KangType::F64 => 8,
-        KangType::Bool => 1,
-        KangType::Str | KangType::Array(_) => 16,
+        KangType::I32 => return 4,
+        KangType::F64 => return 8,
+        KangType::Bool => return 1,
+        KangType::Void => return 0,
+        // 复合类型：走 TargetData 或手动布局
+        _ => {}
+    }
+
+    // 优先使用 LLVM TargetData 获取精确布局
+    if let Some(ref td) = ctx.target_data {
+        let llvm_ty = kang_type_to_basic(ctx, ty);
+        return td.get_store_size(&llvm_ty) as u32;
+    }
+
+    // 回退：手动布局计算（target machine 不可用时）
+    match ty {
+        KangType::Str | KangType::Array(_) => 16, // {ptr, i32} LP64: 8+4 对齐到 8 = 16
         KangType::Struct(name) => {
             let fields = ctx.struct_fields
                 .get(name)
@@ -93,13 +128,12 @@ pub fn size_of(ctx: &CodeGenContext, ty: &KangType) -> u32 {
             let s1 = size_of(ctx, t1);
             let s2 = size_of(ctx, t2);
             let a2 = alignment_of(ctx, t2);
-            // 第二个字段按自身对齐要求放置
             let offset_s2 = (s1 + a2 - 1) / a2 * a2;
             let total = offset_s2 + s2;
             let align = alignment_of(ctx, t1).max(a2);
             (total + align - 1) / align * align
         }
-        KangType::Void => 0,
+        _ => unreachable!(),
     }
 }
 
@@ -122,6 +156,6 @@ pub fn default_value<'ctx>(ctx: &CodeGenContext<'ctx>, ty: &KangType) -> BasicVa
         KangType::Pair(_, _) => {
             kang_type_to_basic(ctx, ty).into_struct_type().const_zero().into()
         }
-        KangType::Void => panic!("void 类型无默认值 — 语义检查应拦截"),
+        KangType::Void => panic!("ICE: Void 类型不应到达代码生成阶段 — 语义检查未拦截"),
     }
 }

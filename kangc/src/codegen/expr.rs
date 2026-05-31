@@ -37,7 +37,10 @@ fn ok<T>(r: std::result::Result<T, inkwell::builder::BuilderError>) -> Result<T>
     r.map_err(|e| CodeGenError { msg: format!("LLVM builder error: {}", e) })
 }
 
-/// 从 CallSiteValue 中提取 BasicValueEnum（非 void 调用）
+/// 从 CallSiteValue 中提取 BasicValueEnum。
+///
+/// 调用者必须在调用前检查返回值类型不是 void（语义检查保证非 void 函数才有返回值）。
+/// `codegen_call` 已做 `return_ty.is_void()` 守卫，其余调用点用于已知非 void 的内置函数。
 fn call_val<'ctx>(call: inkwell::values::CallSiteValue<'ctx>) -> Result<BasicValueEnum<'ctx>> {
     use inkwell::values::ValueKind;
     match call.try_as_basic_value() {
@@ -220,42 +223,75 @@ fn codegen_str_eq<'ctx>(
         inkwell::IntPredicate::EQ, l_len, r_len, "str.eq.len",
     ))?;
 
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i32_ty = ctx.context.i32_type();
-    // memcmp 来自 libc，不链接 libc 的目标需在 kangrt 中自行实现
-    let memcmp = ctx.module.get_function("memcmp").unwrap_or_else(|| {
-        let fn_type = i32_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i32_ty.into()], false);
-        ctx.module.add_function("memcmp", fn_type, None)
-    });
 
     let current_fn = ctx.builder.get_insert_block().unwrap().get_parent().unwrap();
     let entry_bb = ctx.builder.get_insert_block().unwrap();
-    let cmp_bb = ctx.context.append_basic_block(current_fn, "str.eq.cmp");
+    let loop_init_bb = ctx.context.append_basic_block(current_fn, "str.eq.init");
+    let loop_cond_bb = ctx.context.append_basic_block(current_fn, "str.eq.cond");
+    let loop_body_bb = ctx.context.append_basic_block(current_fn, "str.eq.body");
     let merge_bb = ctx.context.append_basic_block(current_fn, "str.eq.merge");
 
-    let _ = ctx.builder.build_conditional_branch(len_eq, cmp_bb, merge_bb);
+    let _ = ctx.builder.build_conditional_branch(len_eq, loop_init_bb, merge_bb);
 
-    // 长度相等: 用 memcmp 比较内容
-    ctx.builder.position_at_end(cmp_bb);
+    // 循环初始化: i = 0
+    ctx.builder.position_at_end(loop_init_bb);
+    let i_alloca = ok(ctx.builder.build_alloca(i32_ty, "str.eq.i"))?;
+    let _ = ctx.builder.build_store(i_alloca, i32_ty.const_zero());
+    let _ = ctx.builder.build_unconditional_branch(loop_cond_bb);
+
+    // 循环条件: i < len
+    ctx.builder.position_at_end(loop_cond_bb);
+    let i_val = ok(ctx.builder.build_load(i32_ty, i_alloca, "str.eq.i.val"))?.into_int_value();
+    let not_done = ok(ctx.builder.build_int_compare(
+        inkwell::IntPredicate::SLT, i_val, l_len, "str.eq.cond",
+    ))?;
+    let _ = ctx.builder.build_conditional_branch(not_done, loop_body_bb, merge_bb);
+
+    // 循环体: 逐字节比较
+    ctx.builder.position_at_end(loop_body_bb);
     let l_ptr = ok(ctx.builder.build_extract_value(lhs_s, 0, "str.eq.l.ptr"))?.into_pointer_value();
     let r_ptr = ok(ctx.builder.build_extract_value(rhs_s, 0, "str.eq.r.ptr"))?.into_pointer_value();
-    let l_cast = ok(ctx.builder.build_pointer_cast(l_ptr, ptr_ty, "l.cast"))?;
-    let r_cast = ok(ctx.builder.build_pointer_cast(r_ptr, ptr_ty, "r.cast"))?;
-    let cmp = ok(ctx.builder.build_call(memcmp, &[l_cast.into(), r_cast.into(), l_len.into()], "memcmp"))?;
-    let cmp_val = call_val(cmp)?.into_int_value();
-    let cmp_zero = ok(ctx.builder.build_int_compare(
-        inkwell::IntPredicate::EQ,
-        cmp_val,
-        ctx.context.i32_type().const_zero(),
-        "str.eq.cmpz",
+    // GEP: 计算 l_ptr + i 和 r_ptr + i
+    let l_gep = unsafe {
+        ctx.builder.build_in_bounds_gep(
+            ctx.context.i8_type(),
+            l_ptr,
+            &[i_val],
+            "str.eq.l.gep",
+        )
+    }.unwrap();
+    let r_gep = unsafe {
+        ctx.builder.build_in_bounds_gep(
+            ctx.context.i8_type(),
+            r_ptr,
+            &[i_val],
+            "str.eq.r.gep",
+        )
+    }.unwrap();
+    let l_byte = ok(ctx.builder.build_load(ctx.context.i8_type(), l_gep, "str.eq.lb"))?.into_int_value();
+    let r_byte = ok(ctx.builder.build_load(ctx.context.i8_type(), r_gep, "str.eq.rb"))?.into_int_value();
+    let bytes_eq = ok(ctx.builder.build_int_compare(
+        inkwell::IntPredicate::EQ, l_byte, r_byte, "str.eq.beq",
     ))?;
-    let _ = ctx.builder.build_unconditional_branch(merge_bb);
 
-    // 合并
+    let loop_inc_bb = ctx.context.append_basic_block(current_fn, "str.eq.inc");
+    let _ = ctx.builder.build_conditional_branch(bytes_eq, loop_inc_bb, merge_bb);
+
+    // i++
+    ctx.builder.position_at_end(loop_inc_bb);
+    let i_next = ok(ctx.builder.build_int_add(
+        i_val, i32_ty.const_int(1, true), "str.eq.inc",
+    ))?;
+    let _ = ctx.builder.build_store(i_alloca, i_next);
+    let _ = ctx.builder.build_unconditional_branch(loop_cond_bb);
+
+    // 合并: phi [false, entry], [false, loop_body], [true, loop_cond]
     ctx.builder.position_at_end(merge_bb);
     let phi = ok(ctx.builder.build_phi(ctx.context.bool_type(), "str.eq.result"))?;
     let false_val = ctx.context.bool_type().const_zero();
-    phi.add_incoming(&[(&false_val, entry_bb), (&cmp_zero, cmp_bb)]);
+    let true_val = ctx.context.bool_type().const_int(1, true);
+    phi.add_incoming(&[(&false_val, entry_bb), (&false_val, loop_body_bb), (&true_val, loop_cond_bb)]);
 
     let result: BasicValueEnum = phi.as_basic_value().into();
     if negate {
@@ -467,7 +503,10 @@ fn codegen_builtin_len<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     args: &[TypedExpr],
 ) -> Result<BasicValueEnum<'ctx>> {
-    let arg = codegen_expr(ctx, &args[0])?;
+    let arg = args
+        .first()
+        .ok_or_else(|| CodeGenError { msg: "builtin len 需要 1 个参数".into() })?;
+    let arg = codegen_expr(ctx, arg)?;
     let struct_val = arg.into_struct_value();
     let len = ok(ctx.builder.build_extract_value(struct_val, 1, "len"))?;
     Ok(len.into())
@@ -478,6 +517,9 @@ fn codegen_builtin_push<'ctx>(
     args: &[TypedExpr],
     _return_ty: &KangType,
 ) -> Result<BasicValueEnum<'ctx>> {
+    if args.len() < 2 {
+        return Err(CodeGenError { msg: "builtin push 需要 2 个参数".into() });
+    }
     let arr = codegen_expr(ctx, &args[0])?;
     let elem = codegen_expr(ctx, &args[1])?;
 
@@ -539,18 +581,20 @@ fn codegen_index<'ctx>(
         "offset",
     ))?;
 
-    // ptr_to_int: 指针转为整数做偏移计算
+    // ptr_to_int: 指针转为 i64 做偏移计算（避免 64 位平台截断）
     let arr_addr = ok(ctx.builder.build_ptr_to_int(
         arr_ptr.into_pointer_value(),
-        ctx.context.i32_type(),
+        ctx.context.i64_type(),
         "arr.addr",
     ))?;
+    let offset_64 = ok(ctx.builder.build_int_z_extend(offset, ctx.context.i64_type(), "offset64"))?;
+    // heap 布局: [4 字节 i32 len] [数据...]，base = arr_addr + 4
     let base_addr = ok(ctx.builder.build_int_add(
         arr_addr,
-        ctx.context.i32_type().const_int(4u64, true),
+        ctx.context.i64_type().const_int(4u64, false),
         "base",
     ))?;
-    let elem_addr = ok(ctx.builder.build_int_add(base_addr, offset, "elem.addr"))?;
+    let elem_addr = ok(ctx.builder.build_int_add(base_addr, offset_64, "elem.addr"))?;
     let elem_ptr = ok(ctx.builder.build_int_to_ptr(
         elem_addr,
         ctx.context.ptr_type(AddressSpace::default()),
@@ -656,7 +700,7 @@ fn codegen_struct_lit<'ctx>(
     name: &str,
     fields: &[(String, TypedExpr)],
 ) -> Result<BasicValueEnum<'ctx>> {
-    let _struct_type = ctx
+    let struct_type = ctx
         .lookup_struct_type(name)
         .ok_or_else(|| CodeGenError { msg: format!("未定义的结构体: {}", name) })?;
 
@@ -665,6 +709,11 @@ fn codegen_struct_lit<'ctx>(
         .get(name)
         .ok_or_else(|| CodeGenError { msg: format!("未定义的结构体: {}", name) })?
         .clone(); // 克隆以释放 ctx 的不可变借用
+
+    // 空结构体直接返回 zero init
+    if field_defs.is_empty() {
+        return Ok(struct_type.const_zero().into());
+    }
 
     let mut field_values: Vec<BasicValueEnum> =
         vec![ctx.default_value(&field_defs[0].1); field_defs.len()];
@@ -677,7 +726,7 @@ fn codegen_struct_lit<'ctx>(
         }
     }
 
-    let mut packed = _struct_type.const_zero();
+    let mut packed = struct_type.const_zero();
     for (i, val) in field_values.iter().enumerate() {
         packed = ok(ctx.builder.build_insert_value(packed, *val, i as u32, &format!("struct.packed.{}", i)))?.into_struct_value();
     }

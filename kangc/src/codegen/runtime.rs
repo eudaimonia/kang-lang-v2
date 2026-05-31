@@ -38,8 +38,8 @@ fn panic_msg_global<'ctx>(
 fn call_panic<'ctx>(ctx: &mut CodeGenContext<'ctx>, msg: &[u8], tag: &str) {
     let global_name = format!("panic.msg.{}", tag);
     let (ptr, len) = panic_msg_global(ctx, &global_name, msg);
-    let panic_func = ctx.module.get_function("k_panic")
-        .expect("k_panic 应在 builtins::declare_all 中已声明");
+    let panic_func = ctx.panic_func
+        .expect("k_panic 应在 builtins::declare_k_panic 中已设置（通过 ctx.panic_func）");
     let _ = ctx.builder.build_call(panic_func, &[ptr.into(), len.into()], "panic");
     let _ = ctx.builder.build_unreachable();
 }

@@ -2,6 +2,7 @@
 // 所有分配在程序结束时统一回收，无 free 操作
 
 use crate::panic::k_panic_impl;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 const CHUNK_SIZE: usize = 64 * 1024; // 每个 chunk 64KB
 
@@ -21,6 +22,10 @@ struct Chunk {
 static mut HEAD: *mut Chunk = core::ptr::null_mut();
 static mut BUMP: *mut u8 = core::ptr::null_mut();
 static mut REMAINING: usize = 0;
+
+/// Arena 重入/并发检测守卫：alloc 和 reset 操作不可重入（包括信号/多线程），
+/// 否则说明设计约束被打破。用 AtomicBool 零同步开销检测异常访问。
+static ARENA_IN_USE: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "C" {
     fn malloc(size: usize) -> *mut u8;
@@ -52,9 +57,17 @@ unsafe fn new_chunk(size: usize) -> *mut Chunk {
 /// 在 arena 中分配 size 字节对齐内存，返回指针（失败时 panic）
 ///
 /// # Safety
-/// `align` 必须是 2 的幂，否则为未定义行为
+/// `align` 必须是 2 的幂，否则调用 k_panic 终止程序
 unsafe fn alloc(size: usize, align: usize) -> *mut u8 {
-    debug_assert!(align.is_power_of_two(), "align 必须是 2 的幂，got: {align}");
+    // 检测并发/重入调用，违反单线程设计约束时终止
+    if ARENA_IN_USE.swap(true, Ordering::Acquire) {
+        k_panic_impl(b"arena: concurrent alloc detected\0".as_ptr(), 29);
+    }
+
+    if !align.is_power_of_two() {
+        ARENA_IN_USE.store(false, Ordering::Release);
+        k_panic_impl(b"arena alloc: align \x00".as_ptr(), 16);
+    }
 
     let bump = unsafe { BUMP };
     let remaining = unsafe { REMAINING };
@@ -70,6 +83,7 @@ unsafe fn alloc(size: usize, align: usize) -> *mut u8 {
             // 零初始化
             core::ptr::write_bytes(ptr, 0, size);
         }
+        ARENA_IN_USE.store(false, Ordering::Release);
         return ptr;
     }
 
@@ -95,6 +109,7 @@ unsafe fn alloc(size: usize, align: usize) -> *mut u8 {
         REMAINING -= offset.checked_add(size).unwrap_or(usize::MAX);
         core::ptr::write_bytes(ptr, 0, size);
     }
+    ARENA_IN_USE.store(false, Ordering::Release);
     ptr
 }
 
@@ -106,15 +121,21 @@ pub unsafe extern "C" fn k_arena_alloc(size: usize) -> *mut u8 {
     unsafe { alloc(size, 8) }
 }
 
-/// 分配 size 字节，align 字节对齐
+/// 分配 size 字节，align 字节对齐。非法对齐值调用 k_panic 终止
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn k_arena_alloc_aligned(size: usize, align: usize) -> *mut u8 {
+    if !align.is_power_of_two() {
+        k_panic_impl(b"arena alloc aligned: align \x00".as_ptr(), 24);
+    }
     unsafe { alloc(size, align) }
 }
 
 /// 重置 arena，释放所有已分配内存
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn k_arena_reset() {
+    if ARENA_IN_USE.swap(true, Ordering::Acquire) {
+        k_panic_impl(b"arena: concurrent reset detected\0".as_ptr(), 29);
+    }
     let mut chunk = unsafe { HEAD };
     while !chunk.is_null() {
         unsafe {

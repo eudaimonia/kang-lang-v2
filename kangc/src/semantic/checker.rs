@@ -12,19 +12,31 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 /// 解析 import 路径: 相对于当前文件所在目录，或绝对路径
-fn resolve_module_path(path: &str, current_file: Option<&str>) -> std::path::PathBuf {
+/// 根据 import 路径和当前文件路径，解析出目标文件的绝对路径
+///
+/// 相对路径以当前源文件的父目录为基准解析。解析后进行规范化，防止 `..` 穿越
+/// 到项目目录之外。若路径穿越或无法解析，返回错误描述。
+fn resolve_module_path(path: &str, current_file: Option<&str>) -> Result<std::path::PathBuf, String> {
     let raw = std::path::PathBuf::from(path);
     if raw.is_absolute() {
-        return raw;
+        return Err("import 不允许绝对路径，请使用相对路径".into());
     }
-    if let Some(file) = current_file {
+    let resolved = if let Some(file) = current_file {
         let parent = std::path::Path::new(file)
             .parent()
             .unwrap_or(std::path::Path::new("."));
         parent.join(path)
     } else {
         raw
+    };
+    // 规范化并验证不穿越工作目录
+    let canon = resolved.canonicalize().map_err(|e| format!("无法解析导入路径 {}: {}", path, e))?;
+    let cwd = std::env::current_dir().map_err(|e| format!("无法获取当前目录: {}", e))?;
+    let canon_cwd = cwd.canonicalize().map_err(|e| format!("无法解析当前目录: {}", e))?;
+    if !canon.starts_with(&canon_cwd) {
+        return Err(format!("导入路径 '{}' 穿越到项目目录之外", path));
     }
+    Ok(canon)
 }
 
 // ── Checker ────────────────────────────────────────────────────────────────────
@@ -75,6 +87,10 @@ impl Checker {
 
     // ── 入口: 两遍扫描 ─────────────────────────────────────────────────────
 
+    /// 类型检查整个程序 — 两遍扫描: 先收集声明, 再检查函数体
+    ///
+    /// 内部调用 `collect_declarations` 和 `check_func_def`。
+    /// 调用者可以直接使用此方法，无需手动准备。
     pub fn check_program(
         &mut self,
         program: &ast::Program,
@@ -127,7 +143,16 @@ impl Checker {
 
     /// 注册导入项的符号声明
     fn register_import_decl(&mut self, imp: &ast::ImportStmt) {
-        let import_path = resolve_module_path(&imp.path, self.source_file.as_deref());
+        let import_path = match resolve_module_path(&imp.path, self.source_file.as_deref()) {
+            Ok(p) => p,
+            Err(msg) => {
+                self.errors.push(SemanticError {
+                    msg,
+                    line: 0, col: 0, span: 0..0,
+                });
+                return;
+            }
+        };
 
         let source = match std::fs::read_to_string(&import_path) {
             Ok(s) => s,
@@ -142,12 +167,24 @@ impl Checker {
         let mut lex_stats = crate::stats::LexStats::default();
         let tokens = match crate::lexer::tokenize(&source, &mut lex_stats) {
             Ok(t) => t,
-            Err(_) => return,
+            Err(e) => {
+                self.errors.push(SemanticError {
+                    msg: format!("导入文件 '{}' 词法错误: {:?}", imp.path, e),
+                    line: 0, col: 0, span: 0..0,
+                });
+                return;
+            }
         };
         let mut parse_stats = crate::stats::ParseStats::default();
         let imported_program = match crate::parser::parse(&tokens, &mut parse_stats) {
             Ok(p) => p,
-            Err(_) => return,
+            Err(e) => {
+                self.errors.push(SemanticError {
+                    msg: format!("导入文件 '{}' 语法错误: {:?}", imp.path, e),
+                    line: 0, col: 0, span: 0..0,
+                });
+                return;
+            }
         };
 
         for item_name in &imp.items {
@@ -204,24 +241,27 @@ impl Checker {
     // ST1: 字段不能是 void
     // ST2: 禁止直接自引用（允许 [Self] 间接引用）
     // ST5: 结构体类型必须在使用前定义（由两遍扫描自然保证，struct 在 pass1 注册）
+    /// 注册结构体声明 — 必须在 `check_func_def` 之前调用，否则函数体中的类型引用会失败
     pub fn check_struct_decl(&mut self, s: &ast::StructDef) {
         let mut fields = Vec::new();
         for (name, ty) in &s.fields {
             let kt = KangType::from_ast_type(ty);
             // ST1: 字段不能是 void
             if kt == KangType::Void {
-                self.error("结构体字段类型不能是 void (ST1)", &name, 0..0);
+                let context = format!("struct {} 的字段 {}", s.name, name);
+                self.error("结构体字段类型不能是 void (ST1)", &context, 0..0);
                 continue;
             }
             // ST2: 禁止直接自引用
             if let KangType::Struct(type_name) = &kt {
                 if type_name == &s.name {
+                    let context = format!("struct {} 的字段 {}", s.name, name);
                     self.error(
                         &format!(
                             "结构体 \"{}\" 不能直接包含自身类型的字段 (ST2)，请使用 [{}]",
                             s.name, s.name
                         ),
-                        &name,
+                        &context,
                     0..0);
                     continue;
                 }
@@ -284,6 +324,8 @@ impl Checker {
 
     // ── 第二遍: 函数体检查 ─────────────────────────────────────────────────
 
+    /// 类型检查单个函数定义 — 调用前必须先通过 `collect_declarations` 注册所有函数签名，
+    /// 通过 `check_struct_decl` 注册所有结构体类型，否则函数体中的调用和类型引用无法解析。
     pub fn check_func_def(&mut self, func: &ast::FuncDef) -> TypedFuncDef {
         self.current_func_name = func.name.clone();
         self.current_func_return = KangType::from_ast_return_type(&func.return_type);

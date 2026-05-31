@@ -6,6 +6,13 @@ use crate::types::*;
 
 // ── libc 外部声明 ──────────────────────────────────────────────────────────────
 
+// C long 在 LP64 (macOS/Linux 64-bit) 为 i64，ILP32 (32-bit) 为 i32
+// Kang 暂不涉及 Windows (LLP64)，故用 target_pointer_width 区分足矣
+#[cfg(target_pointer_width = "64")]
+type CLong = i64;
+#[cfg(not(target_pointer_width = "64"))]
+type CLong = i32;
+
 /// FILE 不透明类型
 #[repr(C)]
 struct FILE {
@@ -35,16 +42,15 @@ unsafe extern "C" {
     fn fgets(s: *mut u8, n: i32, stream: *mut FILE) -> *mut u8;
     fn fputs(s: *const u8, stream: *mut FILE) -> i32;
     fn fputc(c: i32, stream: *mut FILE) -> i32;
-    fn fseek(stream: *mut FILE, offset: i64, whence: i32) -> i32;
-    fn ftell(stream: *mut FILE) -> i64;
+    fn fseek(stream: *mut FILE, offset: CLong, whence: i32) -> i32;
+    fn ftell(stream: *mut FILE) -> CLong;
 
     // string
     fn strlen(s: *const u8) -> usize;
     fn strcmp(s1: *const u8, s2: *const u8) -> i32;
 
     // stdlib
-    // strtol 在 64 位平台上 c_long = i64；若需要 32 位需改为 #[cfg] 区分
-    fn strtol(nptr: *const u8, endptr: *mut *mut u8, base: i32) -> i64;
+    fn strtol(nptr: *const u8, endptr: *mut *mut u8, base: i32) -> CLong;
     fn strtod(nptr: *const u8, endptr: *mut *mut u8) -> f64;
     fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8;
 
@@ -399,7 +405,7 @@ pub unsafe extern "C" fn k_file_size(path: *const u8, path_len: i32) -> KI32Bool
         fseek(file, 0, SEEK_END);
         let size = ftell(file);
         fclose(file);
-        if size < 0 || size > i32::MAX as i64 {
+        if size < 0 || size as i128 > i32::MAX as i128 {
             return KI32Bool { val: 0, ok: 0 };
         }
         KI32Bool { val: size as i32, ok: 1 }
@@ -492,7 +498,7 @@ pub unsafe extern "C" fn k_i32_str(s: *const u8, len: i32) -> KI32Bool {
             }
             p = p.add(1);
         }
-        if val < i32::MIN as i64 || val > i32::MAX as i64 {
+        if (val as i128) < i32::MIN as i128 || (val as i128) > i32::MAX as i128 {
             return KI32Bool { val: 0, ok: 0 };
         }
         KI32Bool { val: val as i32, ok: 1 }

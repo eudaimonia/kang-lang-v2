@@ -78,7 +78,9 @@ fn kstr_params<'ctx>(ctx: &CodeGenContext<'ctx>) -> Vec<inkwell::types::BasicMet
 fn declare_k_panic(ctx: &mut CodeGenContext) {
     let params = kstr_params(ctx);
     let fn_type = ctx.context.void_type().fn_type(&params, false);
-    ctx.module.add_function("k_panic", fn_type, None);
+    let func = ctx.module.add_function("k_panic", fn_type, None);
+    // 存入 context，消除后续按名称查找的时序依赖
+    ctx.panic_func = Some(func);
 }
 
 // ── 集合操作 ──────────────────────────────────────────────────────────────

@@ -32,6 +32,12 @@ impl ReplState {
     fn new() -> Self {
         let tmp_dir = std::env::temp_dir().join(format!("kang_repl_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp_dir);
+        // 设为 owner-only 权限，防止其他用户写入（TOCTOU 防御）
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp_dir, std::fs::Permissions::from_mode(0o700));
+        }
         ReplState {
             defs_source: String::new(),
             line_buffer: String::new(),
@@ -130,17 +136,13 @@ pub fn run_repl() {
                 state.line_buffer.clear();
                 state.continuing = false;
             }
-            Err(ParseError { is_incomplete: true, .. }) => {
+            Err(KangError::Parse(ParseError { is_incomplete: true, .. })) => {
                 // 输入不完整，继续读取
                 state.continuing = true;
             }
             Err(e) => {
-                // 语法错误，报错并清空缓冲区
-                emit_diagnostic(
-                    &KangError::Parse(e),
-                    &state.line_buffer,
-                    "<repl>",
-                );
+                // 词法或语法错误，报错并清空缓冲区
+                emit_diagnostic(&e, &state.line_buffer, "<repl>");
                 state.line_buffer.clear();
                 state.continuing = false;
             }
@@ -153,19 +155,10 @@ pub fn run_repl() {
 
 // ── 词法 + 行解析 ────────────────────────────────────────────────────────────
 
-fn try_parse(source: &str) -> Result<LineResult, ParseError> {
+fn try_parse(source: &str) -> Result<LineResult, KangError> {
     let mut lex_stats = LexStats::default();
-    let tokens = lexer::tokenize(source, &mut lex_stats).map_err(|e| {
-        // 词法错误重新包装为 ParseError，供 REPL 统一错误处理
-        ParseError {
-            msg: e.msg,
-            line: e.line,
-            col: e.col,
-            span: e.span,
-            is_incomplete: false,
-        }
-    })?;
-    parser::parse_line(&tokens)
+    let tokens = lexer::tokenize(source, &mut lex_stats).map_err(KangError::Lex)?;
+    parser::parse_line(&tokens).map_err(KangError::Parse)
 }
 
 // ── 行执行 ────────────────────────────────────────────────────────────────────
@@ -288,7 +281,15 @@ fn compile_and_run(state: &mut ReplState, source: &str) -> Result<(), KangError>
     }
 
     // 链接
-    let kangrt_path = find_or_build_kangrt();
+    let kangrt_path = match find_or_build_kangrt() {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("{}", msg);
+            let _ = std::fs::remove_file(&obj_path);
+            let _ = std::fs::remove_file(&src_path);
+            return Err(KangError::CodeGen(crate::error::CodeGenError { msg }));
+        }
+    };
     link_repl_executable(&obj_path, &kangrt_path, &exe_path);
     let _ = std::fs::remove_file(&obj_path);
     let _ = std::fs::remove_file(&src_path);
@@ -530,7 +531,7 @@ fn unary_op_str(op: &ast::UnaryOp) -> &'static str {
 
 // ── 链接 ──────────────────────────────────────────────────────────────────────
 
-fn find_or_build_kangrt() -> PathBuf {
+fn find_or_build_kangrt() -> Result<PathBuf, String> {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("找不到 workspace 根目录")
@@ -540,7 +541,7 @@ fn find_or_build_kangrt() -> PathBuf {
     let lib_path = lib_dir.join("libkangrt.a");
 
     if lib_path.exists() {
-        return lib_path;
+        return Ok(lib_path);
     }
 
     eprintln!("正在构建 kangrt (首次需要编译，后续将复用)...");
@@ -548,28 +549,31 @@ fn find_or_build_kangrt() -> PathBuf {
         .args(["build", "--release", "-p", "kangrt"])
         .current_dir(&project_root)
         .status()
-        .unwrap_or_else(|e| {
-            eprintln!("无法启动 cargo 构建 kangrt: {}", e);
-            process::exit(1);
-        });
+        .map_err(|e| format!("无法启动 cargo 构建 kangrt: {}", e))?;
 
     if !status.success() {
-        eprintln!("kangrt 构建失败");
-        process::exit(1);
+        return Err("kangrt 构建失败".into());
     }
 
-    lib_path
+    Ok(lib_path)
 }
 
 fn link_repl_executable(obj_path: &PathBuf, kangrt_path: &PathBuf, out_path: &PathBuf) {
-    let status = process::Command::new("cc")
+    let linker = match crate::find_linker() {
+        Ok(l) => l,
+        Err(msg) => {
+            eprintln!("REPL 链接器错误: {}", msg);
+            process::exit(1);
+        }
+    };
+    let status = process::Command::new(&linker)
         .arg(obj_path)
         .arg(kangrt_path)
         .arg("-o")
         .arg(out_path)
         .status()
         .unwrap_or_else(|e| {
-            eprintln!("无法启动链接器 cc: {}", e);
+            eprintln!("无法启动链接器 {}: {}", linker, e);
             process::exit(1);
         });
 

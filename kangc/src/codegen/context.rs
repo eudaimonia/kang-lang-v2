@@ -6,7 +6,7 @@ use crate::semantic::KangType;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetTriple};
+use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine, TargetTriple};
 use inkwell::types::BasicType;
 use inkwell::types::BasicTypeEnum;
 use inkwell::types::StructType;
@@ -47,6 +47,10 @@ pub struct CodeGenContext<'ctx> {
     pub struct_fields: HashMap<String, Vec<(String, KangType)>>,
     // 已声明的外部函数
     declared_funcs: HashMap<String, FunctionValue<'ctx>>,
+    // 目标平台数据布局信息（用于类型大小/对齐计算）
+    pub target_data: Option<TargetData>,
+    // k_panic 函数指针（由 builtins::declare_k_panic 设置，消除按名称查找的时序依赖）
+    pub panic_func: Option<FunctionValue<'ctx>>,
     // 运行时检查计数
     pub runtime_checks: usize,
 }
@@ -71,8 +75,8 @@ impl<'ctx> CodeGenContext<'ctx> {
             }
         };
 
-        // 设置 data layout
-        if let Ok(target) = Target::from_triple(&TargetTriple::create(&resolved_triple)) {
+        // 设置 data layout 并获取 TargetData（用于类型大小/对齐计算）
+        let target_data = if let Ok(target) = Target::from_triple(&TargetTriple::create(&resolved_triple)) {
             if let Some(machine) = target.create_target_machine(
                 &TargetTriple::create(&resolved_triple),
                 "",
@@ -81,20 +85,28 @@ impl<'ctx> CodeGenContext<'ctx> {
                 inkwell::targets::RelocMode::Default,
                 inkwell::targets::CodeModel::Default,
             ) {
-                let data_layout = machine.get_target_data().get_data_layout();
+                let td = machine.get_target_data();
+                let data_layout = td.get_data_layout();
                 module.set_data_layout(&data_layout);
+                Some(td)
+            } else {
+                None
             }
-        }
+        } else {
+            None
+        };
 
         CodeGenContext {
             context,
             module,
             builder,
             target_triple: resolved_triple,
+            target_data,
             scopes: vec![HashMap::new()],
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
             declared_funcs: HashMap::new(),
+            panic_func: None,
             runtime_checks: 0,
         }
     }

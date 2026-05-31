@@ -18,6 +18,14 @@ const MAX_PARSE_DEPTH: usize = 256;
 
 // ── Parser 结构 ─────────────────────────────────────────────────────────────
 
+/// 空 token 流回退哨兵 — Parser 公开 API 接受任意切片，lexer 总是产出 EOF，但防御性编程
+static EOF_SENTINEL: Token = Token {
+    kind: TokenKind::Eof,
+    line: 0,
+    col: 0,
+    span: 0..0,
+};
+
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
@@ -26,6 +34,7 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
+        debug_assert!(!tokens.is_empty(), "Token 流不应为空，至少包含 EOF 哨兵");
         Parser { tokens, pos: 0, depth: 0 }
     }
 
@@ -48,12 +57,11 @@ impl<'a> Parser<'a> {
     // ── 基本操作 ─────────────────────────────────────────────────────────
 
     fn peek(&self) -> &Token {
-        debug_assert!(self.pos < self.tokens.len(), "peek 超出 token 流边界");
-        // 防御: pos 不应越界，但若越界则返回 EOF 避免 panic
         if self.pos < self.tokens.len() {
             &self.tokens[self.pos]
         } else {
-            &self.tokens[self.tokens.len() - 1]
+            // 空 token 流或越界：返回静态 EOF 哨兵避免 panic
+            &EOF_SENTINEL
         }
     }
 
@@ -62,6 +70,9 @@ impl<'a> Parser<'a> {
     }
 
     fn advance(&mut self) -> &Token {
+        if self.tokens.is_empty() {
+            return &EOF_SENTINEL;
+        }
         let t = &self.tokens[self.pos];
         // 防止越过 EOF 导致 peek panic
         self.pos = (self.pos + 1).min(self.tokens.len() - 1);
@@ -69,10 +80,9 @@ impl<'a> Parser<'a> {
     }
 
     /// 期望特定 TokenKind，匹配则前进，否则报错
+    /// 使用全等比较而非 discriminant，避免 `Ident("foo")` 误匹配 `Ident("bar")`
     fn expect(&mut self, expected: &TokenKind) -> Result<(), ParseError> {
-        let expected_d = std::mem::discriminant(expected);
-        let actual_d = std::mem::discriminant(self.peek_kind());
-        if expected_d == actual_d {
+        if self.peek_kind() == expected {
             self.pos += 1;
             Ok(())
         } else {
@@ -84,8 +94,9 @@ impl<'a> Parser<'a> {
     }
 
     /// 如果当前 token 匹配则前进并返回 true
+    /// TokenKind 的所有关键字变体都是 unit variant，故全等比较与 discriminant 等价
     fn match_kw(&mut self, kw: &TokenKind) -> bool {
-        if std::mem::discriminant(self.peek_kind()) == std::mem::discriminant(kw) {
+        if self.peek_kind() == kw {
             self.pos += 1;
             true
         } else {
@@ -597,10 +608,10 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RParen)?;
         self.expect(&TokenKind::Arrow)?;
         let return_type = self.parse_return_type()?;
-        // parse_block 始终返回 Stmt::Block
+        // parse_block 保证返回 Stmt::Block
         let body = match self.parse_block()? {
             Stmt::Block(stmts, ..) => stmts,
-            _ => unreachable!("parse_block 始终返回 Stmt::Block"),
+            _ => return Err(self.error("内部错误: 期望 Block 语句".into())),
         };
         Ok(FuncDef { name, params, return_type, body })
     }

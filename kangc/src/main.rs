@@ -151,6 +151,10 @@ fn cmd_build(args: &[String]) {
     let exe_path = cargs.out_path.clone().unwrap_or_else(|| {
         let mut p = cargs.file_path.clone();
         p.set_extension("");
+        // 防止无扩展名或纯扩展名文件生成空文件名（如 ".kang" → ""）
+        if p.file_name().map_or(true, |n| n.is_empty()) {
+            p.set_file_name("a.out");
+        }
         p
     });
 
@@ -158,8 +162,7 @@ fn cmd_build(args: &[String]) {
     let emit_obj_only = emit == Some(PipelineStage::Object);
 
     // M7: 收集 import 依赖
-    let mut visited = HashSet::new();
-    let all_files = collect_imports(&cargs.file_path, &mut visited);
+    let all_files = collect_imports(&cargs.file_path);
 
     if all_files.len() == 1 && !emit_obj_only {
         // 单文件: 使用原有简单流程
@@ -175,7 +178,7 @@ fn cmd_build(args: &[String]) {
         ) {
             Ok((stats, _)) => {
                 let kangrt_path = find_or_build_kangrt(target_triple);
-                link_executable(&obj_path, &kangrt_path, &exe_path);
+                link_executable(&obj_path, &kangrt_path, &exe_path, target_triple);
                 remove_file(&obj_path);
                 if cargs.show_stats {
                     print_stats(&stats, PipelineStage::Object);
@@ -206,7 +209,7 @@ fn cmd_build(args: &[String]) {
             }
         } else {
             let kangrt_path = find_or_build_kangrt(target_triple);
-            link_multi(&obj_files, &kangrt_path, &exe_path);
+            link_multi(&obj_files, &kangrt_path, &exe_path, target_triple);
             // 清理 .o 文件
             for obj in &obj_files {
                 remove_file(obj);
@@ -224,8 +227,7 @@ fn cmd_run(args: &[String]) {
     let obj_path = cargs.file_path.with_extension("o");
 
     // M7: 收集 import 依赖
-    let mut visited = HashSet::new();
-    let all_files = collect_imports(&cargs.file_path, &mut visited);
+    let all_files = collect_imports(&cargs.file_path);
 
     if all_files.len() == 1 {
         // 单文件: 原有简单流程
@@ -239,7 +241,7 @@ fn cmd_run(args: &[String]) {
         ) {
             Ok((stats, _)) => {
                 let kangrt_path = find_or_build_kangrt(target_triple);
-                link_executable(&obj_path, &kangrt_path, &exe_path);
+                link_executable(&obj_path, &kangrt_path, &exe_path, target_triple);
                 remove_file(&obj_path);
 
                 if cargs.show_stats {
@@ -256,7 +258,7 @@ fn cmd_run(args: &[String]) {
         // 多文件: 编译所有依赖单元
         let obj_files = compile_all_units(&all_files, target_triple, cargs.show_stats);
         let kangrt_path = find_or_build_kangrt(target_triple);
-        link_multi(&obj_files, &kangrt_path, &exe_path);
+        link_multi(&obj_files, &kangrt_path, &exe_path, target_triple);
 
         for obj in &obj_files {
             remove_file(obj);
@@ -267,26 +269,35 @@ fn cmd_run(args: &[String]) {
 }
 
 /// 执行生成的可执行文件并清理
+///
+/// 规范化路径以消除 `..` 和符号链接绕过。拒绝在系统目录中执行，
+/// 防止通过 `-o /bin/../home/user/evil` 等方式写入系统路径。
 fn run_exe(exe_path: &Path) {
-    let exe_parent = exe_path.parent().unwrap_or(Path::new("."));
+    // 规范化路径以消除 `..` 和符号链接绕过
+    let canon = exe_path.canonicalize().unwrap_or_else(|_| exe_path.to_path_buf());
+    let exe_parent = canon.parent().unwrap_or(Path::new("."));
+
+    // 拒绝在系统二进制目录中执行（规范化后做前缀匹配）
     let is_system_dir = exe_parent.starts_with("/usr/bin")
         || exe_parent.starts_with("/bin")
         || exe_parent.starts_with("/sbin")
-        || exe_parent.starts_with("/usr/sbin");
+        || exe_parent.starts_with("/usr/sbin")
+        || exe_parent.starts_with("/usr/local/bin")
+        || exe_parent.starts_with("/opt/homebrew/bin");
     if is_system_dir {
-        eprintln!("安全拒绝: 不会在系统目录 ({}) 中生成并执行二进制", exe_parent.display());
+        eprintln!("安全拒绝: 不会在系统目录 ({}) 中执行二进制", exe_parent.display());
         process::exit(1);
     }
 
-    let exit_status = process::Command::new(exe_path)
+    let exit_status = process::Command::new(&canon)
         .status()
         .unwrap_or_else(|e| {
-            eprintln!("无法执行程序 {}: {}", exe_path.display(), e);
-            remove_file(exe_path);
+            eprintln!("无法执行程序 {}: {}", canon.display(), e);
+            remove_file(&canon);
             process::exit(1);
         });
 
-    remove_file(exe_path);
+    remove_file(&canon);
 
     if !exit_status.success() {
         process::exit(exit_status.code().unwrap_or(1));
@@ -347,13 +358,13 @@ fn print_stats(stats: &CompilerStats, stage: PipelineStage) {
     });
 
     if stage >= PipelineStage::Ast {
-        json["parse"] = serde_json::to_value(&stats.parse).unwrap();
+        json["parse"] = serde_json::to_value(&stats.parse).unwrap_or_default();
     }
     if stage >= PipelineStage::TypedAst {
-        json["semantic"] = serde_json::to_value(&stats.semantic).unwrap();
+        json["semantic"] = serde_json::to_value(&stats.semantic).unwrap_or_default();
     }
     if stage >= PipelineStage::LlvmIr {
-        json["codegen"] = serde_json::to_value(&stats.codegen).unwrap();
+        json["codegen"] = serde_json::to_value(&stats.codegen).unwrap_or_default();
     }
 
     let stats_json = serde_json::to_string_pretty(&json).expect("stats 序列化不应失败");
@@ -390,7 +401,9 @@ fn find_or_build_kangrt(target_triple: Option<&str>) -> PathBuf {
     // 未找到，构建 kangrt
     let display_triple = target_triple.unwrap_or("host");
     eprintln!("正在构建 kangrt (target: {})...", display_triple);
-    let mut cmd = process::Command::new("cargo");
+    // 使用 CARGO 环境变量或从 PATH 解析 cargo，避免 PATH 劫持
+    let cargo_bin = resolve_cargo();
+    let mut cmd = process::Command::new(&cargo_bin);
     cmd.args(["build", "--release", "-p", "kangrt"]);
     if let Some(t) = target_triple {
         cmd.args(["--target", t]);
@@ -410,22 +423,48 @@ fn find_or_build_kangrt(target_triple: Option<&str>) -> PathBuf {
     lib_path
 }
 
+/// 获取并校验链接器路径：返回绝对路径或在不可信时拒绝（CLI 包装，失败时 exit）
+fn validate_linker() -> String {
+    kangc::find_linker().unwrap_or_else(|msg| {
+        eprintln!("安全拒绝: {}", msg);
+        process::exit(1);
+    })
+}
+
+/// 解析 cargo 可执行文件路径：优先 CARGO 环境变量，否则从 PATH 查找
+fn resolve_cargo() -> String {
+    if let Ok(cargo) = std::env::var("CARGO") {
+        let p = PathBuf::from(&cargo);
+        if p.is_file() {
+            let canon = p.canonicalize().unwrap_or(p);
+            return canon.to_string_lossy().to_string();
+        }
+    }
+    match kangc::resolve_from_path("cargo") {
+        Some(p) => p.to_string_lossy().to_string(),
+        None => {
+            eprintln!("无法找到 cargo 构建工具。请设置 CARGO 环境变量或确保 cargo 在 PATH 中");
+            process::exit(1);
+        }
+    }
+}
+
 /// 使用系统 cc 链接 .o 文件 + libkangrt.a → 可执行文件
 ///
-/// 当前默认使用宿主 cc，交叉编译需通过 --target 传递对应 cross-gcc。
-/// 未来可改为通过 LLVM lld 链接以统一交叉编译体验。
-fn link_executable(obj_path: &Path, kangrt_path: &Path, out_path: &Path) {
-    let linker = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
-    let status = process::Command::new(&linker)
-        .arg(obj_path)
-        .arg(kangrt_path)
-        .arg("-o")
-        .arg(out_path)
-        .status()
-        .unwrap_or_else(|e| {
-            eprintln!("无法启动链接器 {}: {}", linker, e);
-            process::exit(1);
-        });
+/// 当 target_triple 设置时，追加 `-target <triple>` 以支持交叉编译（需要 clang）。
+///
+/// CC 环境变量的值必须指向可信目录中的链接器，防止任意代码执行。
+fn link_executable(obj_path: &Path, kangrt_path: &Path, out_path: &Path, target_triple: Option<&str>) {
+    let linker = validate_linker();
+    let mut cmd = process::Command::new(&linker);
+    cmd.arg(obj_path).arg(kangrt_path).arg("-o").arg(out_path);
+    if let Some(t) = target_triple {
+        cmd.arg("-target").arg(t);
+    }
+    let status = cmd.status().unwrap_or_else(|e| {
+        eprintln!("无法启动链接器 {}: {}", linker, e);
+        process::exit(1);
+    });
 
     if !status.success() {
         eprintln!("链接失败");
@@ -435,45 +474,55 @@ fn link_executable(obj_path: &Path, kangrt_path: &Path, out_path: &Path) {
 
 // ── 多文件编译 (M7) ────────────────────────────────────────────────────────────
 
-/// 递归收集入口文件的 import 依赖，返回需要编译的所有源文件路径
-fn collect_imports(entry: &Path, visited: &mut HashSet<PathBuf>) -> Vec<PathBuf> {
+/// 收集入口文件的 import 依赖（迭代 BFS，避免深度导入链栈溢出），返回编译顺序的文件列表
+fn collect_imports(entry: &Path) -> Vec<PathBuf> {
+    use std::collections::VecDeque;
+
+    let mut result: Vec<PathBuf> = Vec::new();
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut queue: VecDeque<PathBuf> = VecDeque::new();
+
     let canon = entry.canonicalize().unwrap_or_else(|_| entry.to_path_buf());
-    if !visited.insert(canon.clone()) {
-        return vec![]; // 已访问（处理循环导入）
-    }
+    visited.insert(canon.clone());
+    result.push(canon.clone());
+    queue.push_back(canon);
 
-    let mut files = vec![canon.clone()];
-    let source = match std::fs::read_to_string(entry) {
-        Ok(s) => s,
-        Err(_) => return files,
-    };
+    while let Some(current) = queue.pop_front() {
+        let source = match std::fs::read_to_string(&current) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
 
-    let mut lex_stats = kangc::stats::LexStats::default();
-    let tokens = match kangc::lexer::tokenize(&source, &mut lex_stats) {
-        Ok(t) => t,
-        Err(_) => return files,
-    };
-    let mut parse_stats = kangc::stats::ParseStats::default();
-    let program = match kangc::parser::parse(&tokens, &mut parse_stats) {
-        Ok(p) => p,
-        Err(_) => return files,
-    };
+        let mut lex_stats = kangc::stats::LexStats::default();
+        let tokens = match kangc::lexer::tokenize(&source, &mut lex_stats) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let mut parse_stats = kangc::stats::ParseStats::default();
+        let program = match kangc::parser::parse(&tokens, &mut parse_stats) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
 
-    let base_dir = entry.parent().unwrap_or(Path::new("."));
+        let base_dir = current.parent().unwrap_or(Path::new("."));
 
-    for item in &program.items {
-        if let kangc::ast::TopLevel::Import(imp) = item {
-            let dep_path = base_dir.join(&imp.path);
-            if dep_path.exists() {
-                let mut deps = collect_imports(&dep_path, visited);
-                files.append(&mut deps);
-            } else {
-                eprintln!("警告: 导入文件不存在: {} (来自 {})", imp.path, entry.display());
+        for item in &program.items {
+            if let kangc::ast::TopLevel::Import(imp) = item {
+                let dep_path = base_dir.join(&imp.path);
+                if !dep_path.exists() {
+                    eprintln!("警告: 导入文件不存在: {} (来自 {})", imp.path, current.display());
+                    continue;
+                }
+                let dep_canon = dep_path.canonicalize().unwrap_or_else(|_| dep_path.clone());
+                if visited.insert(dep_canon.clone()) {
+                    result.push(dep_canon.clone());
+                    queue.push_back(dep_canon);
+                }
             }
         }
     }
 
-    files
+    result
 }
 
 /// 编译所有源文件到 .o 文件，返回 .o 文件路径列表
@@ -503,6 +552,10 @@ fn compile_all_units(
                 }
             }
             Err(e) => {
+                // 清理已生成的 .o 文件，避免残留中间产物
+                for obj in &obj_files {
+                    let _ = std::fs::remove_file(obj);
+                }
                 emit_diagnostic(&e, &source, &file.to_string_lossy());
                 process::exit(1);
             }
@@ -513,15 +566,16 @@ fn compile_all_units(
 }
 
 /// 链接多个 .o 文件 + libkangrt.a → 可执行文件
-fn link_multi(obj_files: &[PathBuf], kangrt_path: &Path, out_path: &Path) {
-    let linker = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+fn link_multi(obj_files: &[PathBuf], kangrt_path: &Path, out_path: &Path, target_triple: Option<&str>) {
+    let linker = validate_linker();
     let mut cmd = process::Command::new(&linker);
     for obj in obj_files {
         cmd.arg(obj);
     }
-    cmd.arg(kangrt_path)
-        .arg("-o")
-        .arg(out_path);
+    cmd.arg(kangrt_path).arg("-o").arg(out_path);
+    if let Some(t) = target_triple {
+        cmd.arg("-target").arg(t);
+    }
 
     let status = cmd.status().unwrap_or_else(|e| {
         eprintln!("无法启动链接器 {}: {}", linker, e);

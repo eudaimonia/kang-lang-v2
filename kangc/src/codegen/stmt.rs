@@ -10,6 +10,11 @@ use inkwell::AddressSpace;
 
 type Result<T> = std::result::Result<T, CodeGenError>;
 
+/// 将 LLVM BuilderError 转为 CodeGenError 传播。
+///
+/// LLVM builder 错误（类型不匹配等）在执行正确类型检查的 Kang 程序中不应出现。
+/// 语义检查在代码生成之前保证了类型正确性，因此此处的错误意味着编译器自身存在 bug。
+/// 使用此辅助函数而非直接 unwrap，是为了将此类内部一致性错误优雅地报告给用户。
 fn ok<T>(r: std::result::Result<T, inkwell::builder::BuilderError>) -> Result<T> {
     r.map_err(|e| CodeGenError { msg: format!("LLVM builder error: {}", e) })
 }
