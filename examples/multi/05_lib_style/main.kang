@@ -1,0 +1,43 @@
+// main.kang — 库风格示例：多模块依赖图 (main → calc, fmt; fmt → calc)
+import calc { avg } from "./calc.kang";
+import fmt { progress_bar } from "./fmt.kang";
+
+def main() -> i32 {
+    // 使用 calc.avg
+    var data:[i32] = [85, 92, 78, 95, 88];
+    var average:i32 = calc.avg(data);
+    // (85+92+78+95+88)/5 = 438/5 = 87
+    if average == 87 then {
+        puts("avg=87: OK");
+    } else {
+        var msg:str = "avg: FAIL, got " + str(average);
+        puts(msg);
+        return 1;
+    }
+
+    // 使用 fmt.progress_bar (内部使用了 calc.clamp)
+    var bar1:str = fmt.progress_bar("Chinese", 85, 100, 20);
+    var bar2:str = fmt.progress_bar("Math", 92, 100, 20);
+    var bar3:str = fmt.progress_bar("English", 78, 100, 20);
+
+    if len(bar1) > 0 then {
+        puts(bar1);
+    } else {
+        puts("progress_bar: FAIL");
+        return 1;
+    }
+
+    puts(bar2);
+    puts(bar3);
+
+    // 验证进度条格式: label + " [" 开头
+    if bar1[0] == "C" then {
+        puts("进度条格式: OK");
+    } else {
+        puts("进度条格式: FAIL");
+        return 1;
+    }
+
+    puts("库风格多模块全部通过");
+    return 0;
+}

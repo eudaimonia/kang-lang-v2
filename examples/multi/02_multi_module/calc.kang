@@ -1,0 +1,9 @@
+// calc.kang — 计算工具模块
+
+def square(x:i32) -> i32 {
+    return x * x;
+}
+
+def cube(x:i32) -> i32 {
+    return x * x * x;
+}

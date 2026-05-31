@@ -1,0 +1,33 @@
+// main.kang — 单文件导入示例：从 math.kang 导入函数
+import m { add, sub, mul } from "./math.kang";
+
+def main() -> i32 {
+    var x:i32 = m.add(10, 20);
+    var y:i32 = m.sub(x, 5);
+    var z:i32 = m.mul(y, 3);
+
+    if x == 30 then {
+        puts("add(10,20)=30: OK");
+    } else {
+        puts("add: FAIL");
+        return 1;
+    }
+
+    if y == 25 then {
+        puts("sub(30,5)=25: OK");
+    } else {
+        puts("sub: FAIL");
+        return 1;
+    }
+
+    if z == 75 then {
+        puts("mul(25,3)=75: OK");
+    } else {
+        puts("mul: FAIL");
+        return 1;
+    }
+
+    var msg:str = "简单导入: " + str(x) + " - 5 = " + str(y) + ", * 3 = " + str(z);
+    puts(msg);
+    return 0;
+}

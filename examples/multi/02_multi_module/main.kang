@@ -1,0 +1,43 @@
+// main.kang — 多模块导入示例：从两个不同模块导入函数
+import s { greet, repeat } from "./strings.kang";
+import c { square, cube } from "./calc.kang";
+
+def main() -> i32 {
+    // 使用 strings 模块
+    var msg:str = s.greet("Kang");
+    if msg == "Hello, Kang!" then {
+        puts("greet: OK");
+    } else {
+        puts("greet: FAIL");
+        return 1;
+    }
+
+    var stars:str = s.repeat("*", 5);
+    if stars == "*****" then {
+        puts("repeat(*,5): OK");
+    } else {
+        puts("repeat: FAIL");
+        return 1;
+    }
+
+    // 使用 calc 模块
+    var sq:i32 = c.square(7);
+    if sq == 49 then {
+        puts("square(7)=49: OK");
+    } else {
+        puts("square: FAIL");
+        return 1;
+    }
+
+    var cb:i32 = c.cube(3);
+    if cb == 27 then {
+        puts("cube(3)=27: OK");
+    } else {
+        puts("cube: FAIL");
+        return 1;
+    }
+
+    var report:str = stars + " " + msg + " " + str(sq) + " " + str(cb);
+    puts(report);
+    return 0;
+}

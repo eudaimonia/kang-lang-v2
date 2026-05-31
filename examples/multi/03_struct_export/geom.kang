@@ -1,0 +1,20 @@
+// geom.kang — 几何类型模块：导出 Point 结构体和距离计算函数
+
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+def dist_sq(a:Point, b:Point) -> i32 {
+    var dx:i32 = a.x - b.x;
+    var dy:i32 = a.y - b.y;
+    return dx * dx + dy * dy;
+}
+
+def origin() -> Point {
+    return Point{x: 0, y: 0};
+}
+
+def mid(a:Point, b:Point) -> Point {
+    return Point{x: (a.x + b.x) / 2, y: (a.y + b.y) / 2};
+}

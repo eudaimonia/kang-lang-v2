@@ -1,0 +1,16 @@
+// mid.kang — 中间层：导入 base.kang，提供更高级的格式化功能
+import fmt { pad_left, bracket } from "./base.kang";
+
+def format_row(label:str, value:i32) -> str {
+    var lhs:str = fmt.pad_left(label, 8);
+    var rhs:str = fmt.bracket(str(value));
+    return lhs + " = " + rhs;
+}
+
+def make_header(title:str, width:i32) -> str {
+    var line:str = "";
+    for var i:i32 = 0, i < width, i = i + 1 in {
+        line = line + "=";
+    }
+    return line + " " + title + " " + line;
+}

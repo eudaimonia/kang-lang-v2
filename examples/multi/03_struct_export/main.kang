@@ -1,0 +1,48 @@
+// main.kang — 结构体导入示例：从 geom.kang 导入 Point 结构体和函数
+import g { Point, dist_sq, origin, mid } from "./geom.kang";
+
+def main() -> i32 {
+    var p1:Point = Point{x: 3, y: 4};
+    var p2:Point = Point{x: 6, y: 8};
+
+    // 距离平方
+    var d:i32 = g.dist_sq(p1, p2);
+    // dx=3, dy=4 → 9+16 = 25
+    if d == 25 then {
+        puts("dist_sq((3,4),(6,8))=25: OK");
+    } else {
+        var msg:str = "dist_sq: FAIL, got " + str(d);
+        puts(msg);
+        return 1;
+    }
+
+    // 原点
+    var o:Point = g.origin();
+    if o.x == 0 then {
+        puts("origin.x=0: OK");
+    } else {
+        puts("origin.x: FAIL");
+        return 1;
+    }
+
+    // 中点
+    var m:Point = g.mid(p1, p2);
+    // mid((3,4),(6,8)) = (4, 6)
+    if m.x == 4 then {
+        puts("mid.x=4: OK");
+    } else {
+        var msg:str = "mid.x: FAIL, got " + str(m.x);
+        puts(msg);
+        return 1;
+    }
+    if m.y == 6 then {
+        puts("mid.y=6: OK");
+    } else {
+        puts("mid.y: FAIL");
+        return 1;
+    }
+
+    var report:str = "中点: (" + str(m.x) + ", " + str(m.y) + "), 距离平方: " + str(d);
+    puts(report);
+    return 0;
+}

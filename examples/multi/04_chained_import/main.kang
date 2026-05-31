@@ -1,0 +1,42 @@
+// main.kang — 链式导入示例：main → mid → base (嵌套 import)
+import tbl { format_row, make_header } from "./mid.kang";
+
+def main() -> i32 {
+    var header:str = tbl.make_header("成绩单", 5);
+    puts(header);
+
+    var r1:str = tbl.format_row("数学", 95);
+    var r2:str = tbl.format_row("语文", 87);
+    var r3:str = tbl.format_row("英语", 92);
+
+    if len(r1) > 0 then {
+        puts(r1);
+    } else {
+        puts("format_row: FAIL");
+        return 1;
+    }
+
+    puts(r2);
+    puts(r3);
+
+    // 验证格式化结果
+    var r1_prefix:str = r1[0];
+    // r1 以空格开头(pad_left 8), 所以第一个字符是空格
+    if r1_prefix == " " then {
+        puts("pad_left 格式化: OK");
+    } else {
+        puts("pad_left 格式化: FAIL");
+        return 1;
+    }
+
+    // 验证 bracket
+    if r2[0] == " " then {
+        puts("r2 对齐: OK");
+    } else {
+        puts("r2 对齐: FAIL");
+        return 1;
+    }
+
+    puts("链式导入全部通过");
+    return 0;
+}

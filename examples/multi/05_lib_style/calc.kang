@@ -1,0 +1,19 @@
+// calc.kang — 核心计算模块（被 fmt.kang 和 main.kang 导入）
+
+def clamp(val:i32, lo:i32, hi:i32) -> i32 {
+    if val < lo then {
+        return lo;
+    }
+    if val > hi then {
+        return hi;
+    }
+    return val;
+}
+
+def avg(arr:[i32]) -> i32 {
+    var sum:i32 = 0;
+    for var i:i32 = 0, i < len(arr), i = i + 1 in {
+        sum = sum + arr[i];
+    }
+    return sum / len(arr);
+}

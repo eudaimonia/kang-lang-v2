@@ -1,0 +1,17 @@
+// fmt.kang — 格式化模块：导入 calc 模块的 clamp 辅助格式化
+import calc { clamp } from "./calc.kang";
+
+// 生成进度条
+def progress_bar(label:str, val:i32, max:i32, width:i32) -> str {
+    var pct:i32 = val * width / max;
+    var clamped:i32 = calc.clamp(pct, 0, width);
+    var bar:str = "";
+    for var i:i32 = 0, i < width, i = i + 1 in {
+        if i < clamped then {
+            bar = bar + "#";
+        } else {
+            bar = bar + "-";
+        }
+    }
+    return label + " [" + bar + "] " + str(val) + "/" + str(max);
+}

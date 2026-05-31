@@ -1,0 +1,15 @@
+// base.kang — 基础层：字符串格式化工具
+// 被 mid.kang 导入，形成 import 链
+
+def pad_left(s:str, width:i32) -> str {
+    var n:i32 = width - len(s);
+    var result:str = "";
+    for var i:i32 = 0, i < n, i = i + 1 in {
+        result = result + " ";
+    }
+    return result + s;
+}
+
+def bracket(s:str) -> str {
+    return "[" + s + "]";
+}

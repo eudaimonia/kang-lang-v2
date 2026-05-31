@@ -1,0 +1,13 @@
+// strings.kang — 字符串工具模块
+
+def greet(name:str) -> str {
+    return "Hello, " + name + "!";
+}
+
+def repeat(s:str, n:i32) -> str {
+    var result:str = "";
+    for var i:i32 = 0, i < n, i = i + 1 in {
+        result = result + s;
+    }
+    return result;
+}

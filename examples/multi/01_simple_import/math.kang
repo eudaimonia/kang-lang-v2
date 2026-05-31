@@ -1,0 +1,13 @@
+// math.kang — 数学工具模块：导出加法、减法、乘法函数
+
+def add(a:i32, b:i32) -> i32 {
+    return a + b;
+}
+
+def sub(a:i32, b:i32) -> i32 {
+    return a - b;
+}
+
+def mul(a:i32, b:i32) -> i32 {
+    return a * b;
+}
