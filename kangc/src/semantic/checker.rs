@@ -51,6 +51,7 @@ pub struct Checker {
     current_func_name: String,
     in_loop: bool,
     source_file: Option<String>,
+    source_text: Option<String>,
     /// alias → module_name 映射（如 m → math），用于解析 import 调用的代码生成名称
     alias_modules: HashMap<String, String>,
     /// 从导入模块收集的结构体定义, 注入 TypedProgram 供代码生成使用
@@ -58,7 +59,7 @@ pub struct Checker {
 }
 
 impl Checker {
-    pub fn new(file_path: Option<&str>) -> Self {
+    pub fn new(file_path: Option<&str>, source_text: Option<&str>) -> Self {
         Checker {
             symbols: SymbolTable::new(),
             structs: HashMap::new(),
@@ -69,6 +70,7 @@ impl Checker {
             current_func_name: String::new(),
             in_loop: false,
             source_file: file_path.map(|s| s.to_string()),
+            source_text: source_text.map(|s| s.to_string()),
             alias_modules: HashMap::new(),
             imported_structs: Vec::new(),
         }
@@ -154,10 +156,7 @@ impl Checker {
         let import_path = match resolve_module_path(&imp.path, self.source_file.as_deref()) {
             Ok(p) => p,
             Err(msg) => {
-                self.errors.push(SemanticError {
-                    msg,
-                    line: 0, col: 0, span: 0..0,
-                });
+                self.error(&msg, "", imp.span.clone());
                 return;
             }
         };
@@ -165,10 +164,7 @@ impl Checker {
         let source = match std::fs::read_to_string(&import_path) {
             Ok(s) => s,
             Err(_) => {
-                self.errors.push(SemanticError {
-                    msg: format!("无法找到导入文件: {}", imp.path),
-                    line: 0, col: 0, span: 0..0,
-                });
+                self.error(&format!("无法找到导入文件: {}", imp.path), "", imp.span.clone());
                 return;
             }
         };
@@ -472,7 +468,9 @@ impl Checker {
                                 ),
                                 name,
                             span_of_expr(init));
-                        } else {
+                        } else if expected_count > 1 {
+                            // 多接收时在此处计 passes（pair 解包检查）
+                            // 单接收的 passes 已由 check_expr 内部计数，避免重复
                             self.passes += 1;
                         }
                     } else if i == 1 {
@@ -591,13 +589,14 @@ impl Checker {
             }
             ast::LValue::Index { array, .. } => {
                 // AS1: str 不可变，索引不可作左值
-                let arr_typed = self.check_expr(array, None);
-                if matches!(arr_typed.ty, KangType::Str) {
+                // 使用 peek_expr_type 避免重复计 pass（类型解析不计入 passes）
+                let arr_ty = self.peek_expr_type(array);
+                if matches!(arr_ty, KangType::Str) {
                     self.error("字符串不可变，s[i] 不能作为赋值左值 (AS1)", "", span_of_lvalue(lv));
                     return None;
                 }
                 // 数组索引: 返回元素类型
-                if let KangType::Array(elem) = &arr_typed.ty {
+                if let KangType::Array(elem) = &arr_ty {
                     Some(*elem.clone())
                 } else {
                     None
@@ -605,8 +604,9 @@ impl Checker {
             }
             ast::LValue::FieldAccess { obj, field, .. } => {
                 // ST6/ST7: 字段访问须是结构体且字段存在
-                let obj_typed = self.check_expr(obj, None);
-                if let KangType::Struct(name) = &obj_typed.ty {
+                // 使用 peek_expr_type 避免重复计 pass
+                let obj_ty = self.peek_expr_type(obj);
+                if let KangType::Struct(name) = &obj_ty {
                     if let Some(info) = self.structs.get(name) {
                         for (fname, fty) in &info.fields {
                             if fname == field {
@@ -1030,9 +1030,9 @@ impl Checker {
         }
     }
 
-    /// 快速窥探表达式的类型，用于字符串拼接判断。
+    /// 快速窥探表达式的类型，仅用于类型推断（如字符串拼接判断）。
     ///
-    /// 仅处理简单字面量和标识符，不递归检查子表达式。对嵌套表达式保守返回非 str 类型。
+    /// 递归处理嵌套表达式但不产生 side effect（不计 passes），
     /// 分离此函数是为了避免在 check_binary 中同时借用 self 的不可变和可变引用。
     fn peek_expr_type(&self, expr: &ast::Expr) -> KangType {
         match expr {
@@ -1048,8 +1048,67 @@ impl Checker {
                     _ => None,
                 })
                 .unwrap_or(KangType::I32),
-            // 深度嵌套: 保守假设非 str
-            _ => KangType::I32,
+            ast::Expr::Call { func, .. } => {
+                // func 是 Box<Expr>，可以是 Ident("f") 或 FieldAccess { obj: Ident("m"), field: "f" }
+                match func.as_ref() {
+                    ast::Expr::Ident(name, ..) => self
+                        .symbols
+                        .lookup(name)
+                        .and_then(|e| match &e.kind {
+                            SymbolKind::Function(sig) => Some(sig.return_type.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or(KangType::I32),
+                    _ => KangType::I32,
+                }
+            }
+            ast::Expr::FieldAccess { obj, field, .. } => {
+                match self.peek_expr_type(obj) {
+                    KangType::Struct(name) => self.structs.get(&name)
+                        .and_then(|info| info.fields.iter()
+                            .find(|(fn_, _)| *fn_ == *field)
+                            .map(|(_, ft)| ft.clone())
+                        )
+                        .unwrap_or(KangType::I32),
+                    _ => KangType::I32,
+                }
+            }
+            ast::Expr::Index { array, .. } => {
+                match self.peek_expr_type(array) {
+                    KangType::Array(elem) => *elem.clone(),
+                    KangType::Str => KangType::Str,
+                    _ => KangType::I32,
+                }
+            }
+            ast::Expr::Binary { left, op, right, .. } => {
+                match op {
+                    BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::And | BinOp::Or => KangType::Bool,
+                    BinOp::Add => {
+                        let lt = self.peek_expr_type(left);
+                        let rt = self.peek_expr_type(right);
+                        if lt == KangType::Str || rt == KangType::Str {
+                            KangType::Str
+                        } else if lt == KangType::F64 || rt == KangType::F64 {
+                            KangType::F64
+                        } else {
+                            KangType::I32
+                        }
+                    }
+                    _ => {
+                        let lt = self.peek_expr_type(left);
+                        if lt == KangType::F64 { KangType::F64 } else { KangType::I32 }
+                    }
+                }
+            }
+            ast::Expr::Unary { expr: inner, .. } => self.peek_expr_type(inner),
+            ast::Expr::ArrayLit(elems, ..) => {
+                if let Some(first) = elems.first() {
+                    KangType::Array(Box::new(self.peek_expr_type(first)))
+                } else {
+                    KangType::Array(Box::new(KangType::I32))
+                }
+            }
+            ast::Expr::StructLit { name, .. } => KangType::Struct(name.clone()),
         }
     }
 
@@ -1493,16 +1552,16 @@ impl Checker {
             }
         }
 
-        // ST4: 检查是否有多余字段
-        for pf in &provided_field_names {
-            if !declared_field_names.contains(pf) {
+        // ST4: 检查是否有多余字段，使用字段值表达式的 span 而非整体 struct-lit span
+        for (pf, pf_expr) in fields {
+            if !declared_field_names.contains(&pf.as_str()) {
                 self.error(
                     &format!(
                         "结构体 \"{}\" 没有字段 \"{}\" (ST4) — 多余字段",
                         name, pf
                     ),
                     pf,
-                span.clone());
+                span_of_expr(pf_expr));
             }
         }
 
@@ -1551,11 +1610,30 @@ impl Checker {
         } else {
             format!("{}: \"{}\"", msg, context)
         };
+        let (line, col) = self.source_text.as_ref()
+            .map(|src| line_col_from_span(src, &span))
+            .unwrap_or((0, 0));
         self.errors.push(SemanticError {
             msg: full_msg,
-            line: 0,
-            col: 0,
+            line,
+            col,
             span,
         });
     }
+}
+
+/// 根据源码和 byte span 计算 (行号, 列号)，均为 1-based
+/// 用于在错误消息中提供精确的源码位置
+fn line_col_from_span(source: &str, span: &Range<usize>) -> (usize, usize) {
+    let offset = span.start.min(source.len());
+    let safe = if source.is_char_boundary(offset) {
+        offset
+    } else {
+        (0..offset).rev().find(|&i| source.is_char_boundary(i)).unwrap_or(0)
+    };
+    let prefix = &source[..safe];
+    let line = prefix.chars().filter(|&c| c == '\n').count() + 1;
+    let last_nl = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let col = prefix[last_nl..].chars().count() + 1;
+    (line, col)
 }

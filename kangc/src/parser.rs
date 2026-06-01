@@ -668,7 +668,7 @@ impl<'a> Parser<'a> {
             _ => return Err(self.error(format!("期望字符串路径，但得到 {:?}", self.peek_kind()))),
         };
         self.expect(&TokenKind::Semi)?;
-        Ok(ImportStmt { alias, items, path })
+        Ok(ImportStmt { alias, items, path, span: self.current_span() })
     }
 
     // ImportItems = ImportItem { "," ImportItem }

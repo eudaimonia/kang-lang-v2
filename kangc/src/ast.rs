@@ -477,12 +477,14 @@ impl fmt::Display for FuncDef {
 /// 通过别名限定访问导入项（如 m.add()），避免名称冲突。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportStmt {
-    /// 模块别名，用于限定访问（如 `math` 在 `import math { add } from "./math.kang"` 中）
+    /// 模块别名
     pub alias: String,
     /// 从模块中导入的符号名列表
     pub items: Vec<String>,
     /// 模块文件的路径（相对于当前源文件）
     pub path: String,
+    /// 源码位置（整个 import 语句的 span）
+    pub span: Range<usize>,
 }
 
 impl fmt::Display for ImportStmt {
@@ -857,6 +859,7 @@ mod tests {
             alias: "m".into(),
             items: vec!["add".into()],
             path: "./math.kang".into(),
+            span: S,
         };
         assert_eq!(format!("{}", imp), "(import \"m\" [add] from \"./math.kang\")");
     }
@@ -867,6 +870,7 @@ mod tests {
             alias: "m".into(),
             items: vec!["add".into(), "sub".into()],
             path: "./math.kang".into(),
+            span: S,
         };
         let out = format!("{}", imp);
         assert!(out.contains("import \"m\" [add sub]"), "output: {}", out);
@@ -880,6 +884,7 @@ mod tests {
                     alias: "m".into(),
                     items: vec!["f".into()],
                     path: "./lib.kang".into(),
+                    span: S,
                 }),
                 TopLevel::Func(FuncDef {
                     name: "main".into(),

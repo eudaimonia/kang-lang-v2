@@ -21,7 +21,9 @@ pub use types::*;
 /// - file_path: 用于错误消息中的文件引用
 pub fn check(program: &ast::Program, stats: &mut SemanticStats, file_path: &str) -> Result<TypedProgram, Vec<SemanticError>> {
     let start = Instant::now();
-    let mut checker = Checker::new(Some(file_path));
+    // 读取源码文本供 line/col 计算使用（非必需，读取失败则 line/col 为 0）
+    let source_text = std::fs::read_to_string(file_path).ok();
+    let mut checker = Checker::new(Some(file_path), source_text.as_deref());
 
     let result = checker.check_program(program);
 
