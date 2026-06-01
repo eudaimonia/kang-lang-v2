@@ -6,14 +6,15 @@ use std::ops::Range;
 
 // ── 类型 ────────────────────────────────────────────────────────────────────
 
+/// Kang 语言的基本类型。
 #[derive(Debug, Clone, PartialEq)]
 pub enum BaseType {
-    I32,
-    F64,
-    Str,
-    Bool,
-    Void,
-    UserDef(String),
+    I32,                // 32 位有符号整数
+    F64,                // 64 位浮点数
+    Str,                // 字符串
+    Bool,               // 布尔值
+    Void,               // 无类型（函数无返回值、无意义表达式）
+    UserDef(String),    // 用户定义的类型（引用结构体名）
 }
 
 impl fmt::Display for BaseType {
@@ -29,10 +30,12 @@ impl fmt::Display for BaseType {
     }
 }
 
+/// Kang 语言的完整类型：基本类型或数组类型。
+/// 数组类型 `[T]` 中的 T 只能是 BaseType（不支持嵌套数组）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
-    Base(BaseType),
-    Array(BaseType),
+    Base(BaseType),   // 基本类型: i32 / f64 / str / bool / void / UserDef
+    Array(BaseType),  // 数组: [i32] / [str] 等（元素不能是数组或 void）
 }
 
 impl fmt::Display for Type {
@@ -44,10 +47,12 @@ impl fmt::Display for Type {
     }
 }
 
+/// 函数返回类型：单值返回或多值（Pair）返回。
+/// Pair 语法在 Kang 中写为 `(Type1, Type2)`。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReturnType {
-    Single(Type),
-    Pair(Type, Type),
+    Single(Type),      // 返回单个值: -> i32
+    Pair(Type, Type),  // 返回两个值: -> (i32, bool)
 }
 
 impl fmt::Display for ReturnType {
@@ -62,6 +67,8 @@ impl fmt::Display for ReturnType {
 // ── 表达式 — 每个 variant 携带 span 用于错误诊断
 // ──────────────────────────────────────────────────────────────────
 
+/// 二元运算符，按优先级从低到高枚举。
+/// 优先级: Or < And < Eq < Cmp < Add < Mul
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinOp {
     Or,
@@ -97,10 +104,11 @@ impl fmt::Display for BinOp {
     }
 }
 
+/// 一元运算符: 取负（-）和逻辑非（!）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UnaryOp {
-    Neg,
-    Not,
+    Neg,  // -expr：对 i32/f64 取负
+    Not,  // !expr：对 bool 取逻辑非
 }
 
 impl fmt::Display for UnaryOp {
@@ -112,44 +120,58 @@ impl fmt::Display for UnaryOp {
     }
 }
 
+/// 表达式节点，覆盖 Kang 语言的所有表达式形式。
+/// 每个 variant 携带 span 用于错误诊断。
 #[derive(Debug, Clone)]
 pub enum Expr {
+    /// 二元运算: a + b、a < b、a && b 等
     Binary {
         left: Box<Expr>,
         op: BinOp,
         right: Box<Expr>,
         span: Range<usize>,
     },
+    /// 一元运算: -expr、!expr
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,
         span: Range<usize>,
     },
+    /// 函数调用: f(args...)
     Call {
         func: Box<Expr>,
         args: Vec<Expr>,
         span: Range<usize>,
     },
+    /// 数组/字符串索引: arr[i]
     Index {
         array: Box<Expr>,
         index: Box<Expr>,
         span: Range<usize>,
     },
+    /// 结构体字段访问: obj.field
     FieldAccess {
         obj: Box<Expr>,
         field: String,
         span: Range<usize>,
     },
+    /// 整数字面量
     IntLit(String, Range<usize>),
+    /// 浮点数字面量
     FloatLit(String, Range<usize>),
+    /// 字符串字面量
     StrLit(String, Range<usize>),
+    /// 布尔字面量: true / false
     BoolLit(bool, Range<usize>),
+    /// 数组字面量: [elem1, elem2, ...]
     ArrayLit(Vec<Expr>, Range<usize>),
+    /// 结构体字面量: TypeName{field: val, ...}
     StructLit {
         name: String,
         fields: Vec<(String, Expr)>,
         span: Range<usize>,
     },
+    /// 标识符引用: 变量名或函数名
     Ident(String, Range<usize>),
 }
 
@@ -228,12 +250,17 @@ impl PartialEq for Expr {
     }
 }
 
-// ── 左值 ────────────────────────────────────────────────────────────────────
+// ── 左值（赋值目标） ─────────────────────────────────────────────────────────
 
+/// 左值，即可出现在赋值语句左侧的表达式。
+/// 仅三种表达式形式可作左值：变量、索引、字段访问。
 #[derive(Debug, Clone)]
 pub enum LValue {
+    /// 变量名: x
     Ident(String, Range<usize>),
+    /// 数组索引: arr[i]
     Index { array: Box<Expr>, index: Box<Expr>, span: Range<usize> },
+    /// 结构体字段: obj.field
     FieldAccess { obj: Box<Expr>, field: String, span: Range<usize> },
 }
 
@@ -280,28 +307,34 @@ impl fmt::Display for VarBinding {
     }
 }
 
+/// 语句节点，覆盖 Kang 语言的所有语句形式。
 #[derive(Debug, Clone)]
 pub enum Stmt {
+    /// 变量声明: var x:T = expr; 或 var x:T, y:T = expr;
     VarDecl {
         bindings: Vec<VarBinding>,
         init: Box<Expr>,
         span: Range<usize>,
     },
+    /// 赋值语句: lvalue = expr;
     Assign {
         lvalue: LValue,
         value: Box<Expr>,
         span: Range<usize>,
     },
+    /// 返回语句: return; 或 return v1, v2;
     Return {
         values: Vec<Expr>,
         span: Range<usize>,
     },
+    /// if/then/else 条件语句
     If {
         condition: Box<Expr>,
         then_branch: Box<Stmt>,
         else_branch: Option<Box<Stmt>>,
         span: Range<usize>,
     },
+    /// for 循环: for var v:T = start, condition, step in { body }
     For {
         var_name: String,
         var_type: Type,
@@ -312,7 +345,9 @@ pub enum Stmt {
         body: Box<Stmt>,
         span: Range<usize>,
     },
+    /// 表达式语句: expr;
     Expr(Box<Expr>, Range<usize>),
+    /// 语句块: { stmts... }
     Block(Vec<Stmt>, Range<usize>),
 }
 
@@ -393,6 +428,7 @@ impl PartialEq for Stmt {
 
 // ── 顶层 ────────────────────────────────────────────────────────────────────
 
+/// 结构体定义: `struct Name { field1: Type1; field2: Type2; }`
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
     pub name: String,
@@ -409,6 +445,7 @@ impl fmt::Display for StructDef {
     }
 }
 
+/// 函数定义: def name(params...) -> ReturnType { body... }
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuncDef {
     pub name: String,
@@ -435,11 +472,16 @@ impl fmt::Display for FuncDef {
     }
 }
 
-// 模块导入语句 (M7)
+/// 模块导入语句: `import alias { item1, item2 } from "path";` (M7)
+///
+/// 通过别名限定访问导入项（如 m.add()），避免名称冲突。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportStmt {
+    /// 模块别名，用于限定访问（如 `math` 在 `import math { add } from "./math.kang"` 中）
     pub alias: String,
+    /// 从模块中导入的符号名列表
     pub items: Vec<String>,
+    /// 模块文件的路径（相对于当前源文件）
     pub path: String,
 }
 
@@ -456,10 +498,14 @@ impl fmt::Display for ImportStmt {
     }
 }
 
+/// 顶层声明 — 构成 Program 的基本单元。
 #[derive(Debug, Clone, PartialEq)]
 pub enum TopLevel {
+    /// 结构体类型定义
     Struct(StructDef),
+    /// 函数定义
     Func(FuncDef),
+    /// 模块导入语句
     Import(ImportStmt),
 }
 
@@ -473,6 +519,7 @@ impl fmt::Display for TopLevel {
     }
 }
 
+/// 完整的 AST 程序，由一组顶层声明（结构体、函数、导入）组成。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub items: Vec<TopLevel>,

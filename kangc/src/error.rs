@@ -1,10 +1,12 @@
 // 错误类型定义 + ariadne 诊断格式化，全模块共用
+// 编译管线各阶段定义独立错误类型，顶层 KangError 枚举统一聚合
 
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use std::ops::Range;
 
-// ── 错误类型 ────────────────────────────────────────────────────────────────
+// ── 各阶段错误类型 ────────────────────────────────────────────────────────────
 
+/// 统一错误类型，覆盖编译管线各阶段
 #[derive(Debug, Clone)]
 pub enum KangError {
     Lex(LexError),

@@ -1,5 +1,13 @@
-// 内置函数声明 — 将所有 21 个 extern "C" fn 注册到 LLVM Module
+// 内置函数声明 — 将所有 extern "C" fn 注册到 LLVM Module
 // 函数签名与 kangrt C ABI 一致，Kang 类型按 FFI 约定映射为 LLVM 类型
+//
+// ABI 注意事项:
+// Apple ARM64 上 LLVM 将 struct 字段拆分为独立寄存器返回,
+// 但 rustc (kangrt) 遵循标准 AAPCS64 — 将字段打包到 8 字节块中。
+// 为避免 ABI 不匹配, 将多字段返回类型声明为打包形式:
+//   {i32, i32} → i64        (rustc 返回 (ok << 32) | val)
+//   {ptr, i32, i32} → {ptr, i64}  (rustc 返回 ptr 在 x0, (ok<<32)|len 在 x1)
+//   {f64, i32} → {f64, i64}  (f64 在 x0, ok sign-ext 到 64 位在 x1)
 
 use super::context::CodeGenContext;
 use inkwell::AddressSpace;
@@ -89,6 +97,8 @@ fn declare_k_panic(ctx: &mut CodeGenContext) {
 
 // ── 集合操作 ──────────────────────────────────────────────────────────────
 
+/// 在 module 中声明 LLVM 函数，并注册 kang_name → LLVM function 的别名映射。
+/// 用于内置函数在 Kang 源码中以 kang_name 调用，LLVM IR 中使用 llvm_name。
 fn declare_with_alias<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     llvm_name: &str,

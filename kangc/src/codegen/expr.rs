@@ -170,6 +170,10 @@ where
     }
 }
 
+/// 生成除法/求余运算的 LLVM IR，包含运行时安全检查。
+///
+/// 整数除法前插入除零检查（R3）和 INT_MIN / -1 溢出检查（R4），
+/// 浮点除法前插入除零检查。安全检查失败时调用 k_panic 终止程序。
 fn codegen_div<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     lhs: BasicValueEnum<'ctx>,
@@ -311,6 +315,11 @@ fn codegen_str_eq<'ctx>(
 
 // ── 字符串拼接 ─────────────────────────────────────────────────────────────
 
+/// 生成字符串拼接的 LLVM IR: left + right。
+///
+/// 两个操作数先转为 str（非 str 操作数在 binary 解析时自动转换），
+/// 提取各自的 {ptr, len}，调用 C 函数 k_str_concat 在 arena 上分配新字符串，
+/// 返回新的 {ptr, len}。
 fn codegen_str_concat<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     left: &TypedExpr,
@@ -337,7 +346,10 @@ fn codegen_str_concat<'ctx>(
     call_val(call)
 }
 
-/// 将非 str 值转为 str（调用内置 str() 函数）
+/// 将非 str 值转为 str（调用内置 str() 函数）。
+///
+/// 用于字符串拼接（+）时自动转换另一操作数为字符串。i32 调用 k_str_i32，
+/// f64 调用 k_str_f64，bool 先 zext 到 i32 再调用 k_str_bool。
 fn convert_to_str<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     val: BasicValueEnum<'ctx>,
@@ -387,7 +399,12 @@ fn codegen_unary<'ctx>(
 
 // ── 函数调用 ───────────────────────────────────────────────────────────────
 
-/// C ABI 调用时将 Kang 复合类型（Str/Array/Pair）展平为标量参数
+/// C ABI 调用时将 Kang 复合类型（Str/Array/Pair）展平为标量参数。
+///
+/// ARM64 AAPCS64 规定结构体在寄存器中传递时不打包，每个字段占一个寄存器。
+/// 但 Kang 的 Str/Array 类型是 {ptr, len} 结构体，传递时必须拆为 (ptr, len) 两个标量参数
+/// 才能与 C 函数签名匹配。Bool 需要 zext 到 i32（C 的 _Bool 在 ARM64 上也是 i32）。
+/// Pair 作为参数时只取第一值（F6 规则）。
 fn flatten_c_abi_args<'ctx>(
     ctx: &CodeGenContext<'ctx>,
     arg_values: &[BasicValueEnum<'ctx>],
@@ -426,10 +443,14 @@ fn flatten_c_abi_args<'ctx>(
     Ok(flat)
 }
 
-/// C ABI 返回的 Pair 结构从扁平 C struct 转为 Kang 嵌套 struct
+/// C ABI 返回的 Pair 结构从扁平 C struct 转为 Kang 嵌套 struct。
 ///
-/// 运行时返回扁平标量结构（i32 表示 bool），Kang 使用嵌套类型（i1 表示 bool）。
-/// 例如: k_read_file 返回 {ptr, i32 len, i32 ok}，Kang 期望 {{ptr, i32}, i1}
+/// 运行时函数（如 k_read_file）通过 C ABI 返回扁平结构体（i32 表示 bool），
+/// 但 Kang 的 Pair 类型是嵌套结构（i1 表示 bool）。这层转换将两种布局桥接：
+///   - KStrBool:  {ptr, i64}  →  {{ptr, i32}, i1}  （len 和 ok 打包在 i64 中）
+///   - KI32Bool:  i64         →  {i32, i1}          （val 和 ok 打包在 i64 中）
+///   - KF64Bool:  {f64, i64}  →  {f64, i1}          （ok 符号扩展到 i64）
+///   - KBoolBool: i64         →  {i1, i1}            （两个 bool 打包在 i64 中）
 fn repack_c_pair_return<'ctx>(
     ctx: &CodeGenContext<'ctx>,
     call: inkwell::values::CallSiteValue<'ctx>,
@@ -504,7 +525,10 @@ fn repack_c_pair_return<'ctx>(
     }
 }
 
-/// 从 ptr + 拆分后的 len/i1 构建 Kang (str, bool) = {{ptr, i32}, i1}
+/// 从 ptr、len 和 ok 标志构建 Kang 的 (str, bool) 嵌套结构 {{ptr, i32}, i1}。
+///
+/// 由 `repack_c_pair_return` 调用，用于将 C ABI 返回的扁平对转换为 Kang 的嵌套对类型。
+/// 先构造内层 str {ptr, len}，再插入外层 pair {str, bool}。
 fn build_kang_str_pair<'ctx>(
     ctx: &CodeGenContext<'ctx>,
     struct_ty: inkwell::types::StructType<'ctx>,
@@ -524,6 +548,10 @@ fn build_kang_str_pair<'ctx>(
     Ok(p2.into_struct_value().into())
 }
 
+/// 生成函数调用指令。
+///
+/// 特殊处理 len/push 内置函数。对于外部 C ABI 函数，将 Str/Array/Bool 参数展平；
+/// Kang 跨模块函数调用保持参数原样。Pair 返回值需要从 C 扁平布局 repack 为 Kang 嵌套布局。
 fn codegen_call<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     func_name: &str,
@@ -573,7 +601,10 @@ fn codegen_call<'ctx>(
     }
 }
 
-/// F6: Pair 自动解包取第一值（多返回值作单值参数）
+/// F6: Pair 自动解包取第一值（多返回值作单值参数）。
+///
+/// 当多返回值函数被用于期望单个值的上下文时（如 `str.substr(...)` 作为参数传给 `puts`），
+/// 编译器自动取 Pair 的第一值，忽略第二值。
 fn unpack_pair_first(ty: &KangType) -> &KangType {
     match ty {
         KangType::Pair(first, _) => first.as_ref(),
@@ -581,7 +612,10 @@ fn unpack_pair_first(ty: &KangType) -> &KangType {
     }
 }
 
-/// 解析重载函数的 LLVM 名称 (str/i32/f64/bool 语义名 → str_i32 等 LLVM 名)
+/// 将重载函数名映射为带后缀的 LLVM 名。
+///
+/// Kang 的类型转换函数（str()、i32()、f64()、bool()）根据参数类型重载，
+/// 但 LLVM IR 不支持重载，因此需要将 str(i32) 映射为 k_str_i32、str(f64) 映射为 k_str_f64 等。
 fn resolve_overloaded_name(func_name: &str, args: &[TypedExpr]) -> String {
     if args.is_empty() {
         return func_name.to_string();
@@ -612,6 +646,10 @@ fn resolve_overloaded_name(func_name: &str, args: &[TypedExpr]) -> String {
     }
 }
 
+/// 生成 len() 内置函数的 LLVM IR。
+///
+/// len 返回数组或字符串的第二个字段（长度）。数组和字符串的结构都是 {ptr, len}，
+/// 因此从 struct_value 提取 field 1 即可得到长度。
 fn codegen_builtin_len<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     args: &[TypedExpr],
@@ -625,6 +663,12 @@ fn codegen_builtin_len<'ctx>(
     Ok(len.into())
 }
 
+/// 生成 push() 内置函数的 LLVM IR。
+///
+/// push 的过程: 将数组 {ptr, len} 和待追加元素的指针、元素大小传给 C 函数 k_push，
+/// k_push 分配新内存、拷贝旧元素和新元素，返回新的 {ptr, len}。
+/// 关键: codegen 必须将 k_push 返回的新 {ptr, len} 写回原数组变量的 alloca，
+/// 否则变量中的 ptr/len 不会更新。推送到字面量数组时返回值被丢弃（语义检查应拦截）。
 fn codegen_builtin_push<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     args: &[TypedExpr],
@@ -676,13 +720,22 @@ fn codegen_builtin_push<'ctx>(
     Ok(ctx.context.i32_type().const_zero().into())
 }
 
-// Kang 类型的 LLVM 存储大小（字节），用于数组元素偏移计算
+/// Kang 类型的 LLVM 存储大小（字节），用于数组元素偏移计算。
+///
+/// 通过 CodeGenContext::size_of 获取 LLVM TargetData 中类型的存储大小，
+/// 或者在缺少 TargetData 时使用手动对齐计算。返回 i32 以简化与 LLVM i32 运算的互操作。
 pub fn size_of_kang(ctx: &CodeGenContext, ty: &KangType) -> i32 {
     ctx.size_of(ty) as i32
 }
 
 // ── 索引 ───────────────────────────────────────────────────────────────────
 
+/// 生成数组/字符串索引的 LLVM IR: arr[i] 或 s[i]。
+///
+/// 数组内存布局: [4 字节长度头][元素 0][元素 1]...
+/// 字符串内存布局: [字符 0][字符 1]...（无长度头）
+/// 因此数组索引跳过前 4 字节，字符串索引从开头算起。字符串索引返回单个字符的
+/// Kang str {ptr, len=1}，数组索引返回元素值。
 fn codegen_index<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     array: &TypedExpr,
@@ -749,6 +802,10 @@ fn codegen_index<'ctx>(
 
 // ── 字段访问 ──────────────────────────────────────────────────────────────
 
+/// 生成结构体字段访问的 LLVM IR: obj.field。
+///
+/// 查找 obj 的结构体类型中的字段索引，使用 extract_value 从 LLVM struct 值中提取字段值。
+/// 语义检查已保证 obj 是结构体且 field 存在。
 fn codegen_field_access<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     obj: &TypedExpr,
@@ -777,6 +834,11 @@ fn codegen_field_access<'ctx>(
 
 // ── 数组字面量 ─────────────────────────────────────────────────────────────
 
+/// 生成数组字面量的 LLVM IR，如 [1, 2, 3]。
+///
+/// 通过 k_arena_alloc_aligned 从运行时 arena 分配连续内存，
+/// 写入长度头（前 4 字节），然后依次写入每个元素。
+/// 返回 {ptr, len} 结构体 — Kang 数组类型的运行时表示。
 fn codegen_array_lit<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     elems: &[TypedExpr],
@@ -839,6 +901,10 @@ fn codegen_array_lit<'ctx>(
 
 // ── 结构体字面量 ───────────────────────────────────────────────────────────
 
+/// 生成结构体字面量的 LLVM IR，如 Point{x: 1, y: 2}。
+///
+/// 初始化所有字段：用户提供的字段使用表达式求值，未提供的字段使用类型默认值（零初始化）。
+/// 通过 insert_value 指令逐个字段填充 LLVM 结构体值。
 fn codegen_struct_lit<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     name: &str,

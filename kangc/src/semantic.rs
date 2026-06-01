@@ -16,6 +16,9 @@ pub use types::*;
 
 /// 对 AST 进行语义检查，返回类型标注的 TypedProgram
 /// 收集所有错误后一并返回（不因单条错误中断）
+/// - program: parser 产出的 AST
+/// - stats: 写入耗时、错误数、符号数等统计
+/// - file_path: 用于错误消息中的文件引用
 pub fn check(program: &ast::Program, stats: &mut SemanticStats, file_path: &str) -> Result<TypedProgram, Vec<SemanticError>> {
     let start = Instant::now();
     let mut checker = Checker::new(Some(file_path));
@@ -45,7 +48,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    /// 辅助: 读文件 → lex → parse → check → 返回错误数量
+    /// 辅助: 读测试文件 → lex → parse → check → 返回错误数量
     fn check_file(filename: &str) -> (usize, Vec<SemanticError>) {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("../semantic_tests");
@@ -86,7 +89,8 @@ mod tests {
         }
     }
 
-    /// 统计文件中 // ERROR: 标记数量
+    /// 统计测试文件中 // ERROR: 注释标记的数量
+    /// 用于验证语义检查器产生了预期的错误数量
     fn count_error_markers(filename: &str) -> usize {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("../semantic_tests");

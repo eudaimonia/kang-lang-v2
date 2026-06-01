@@ -412,6 +412,14 @@ impl Checker {
 
     // ── VarDecl ─────────────────────────────────────────────────────────────
 
+    /// 检查变量声明语句 `var <bindings> = <init>;`。
+    ///
+    /// 先求值初始化表达式获取类型和值，然后验证:
+    ///   - 接收数量与返回值数量匹配（M4: 单返回不能两接收）
+    ///   - 不能从 void 函数接收返回值（M6）
+    ///   - 各变量的接收类型与返回值类型匹配
+    ///   - 无变量重声明（S1）
+    ///   - 变量不与函数同名（S4）
     fn check_var_decl(&mut self, bindings: &[ast::VarBinding], init: &ast::Expr) -> TypedStmt {
         // 先检查初始化表达式
         let expected_count = bindings.len();
@@ -527,6 +535,10 @@ impl Checker {
 
     // ── Assign ──────────────────────────────────────────────────────────────
 
+    /// 检查赋值语句 `<lvalue> = <value>;`。
+    ///
+    /// 先解析左值类型（变量查找/数组索引/字段访问），再检查表达式，
+    /// 验证左右两侧类型一致（AS2/AS5/AS6）。
     fn check_assign(&mut self, lvalue: &ast::LValue, value: &ast::Expr) -> TypedStmt {
         // 先确定左值类型
         let lvalue_ty = self.resolve_lvalue_type(lvalue);
@@ -553,7 +565,11 @@ impl Checker {
         }
     }
 
-    /// 解析左值的类型（用于赋值类型检查）
+    /// 解析左值的类型，用于赋值类型检查。
+    ///
+    /// Ident → 查符号表找变量类型（S2: 未声明报错；AS4: 函数名不可赋值）。
+    /// Index → 检查字符串不可变（AS1），返回数组元素类型。
+    /// FieldAccess → 查结构体字段类型（ST6/ST7）。
     fn resolve_lvalue_type(&mut self, lv: &ast::LValue) -> Option<KangType> {
         match lv {
             ast::LValue::Ident(name, ..) => {
@@ -617,6 +633,12 @@ impl Checker {
 
     // ── Return ──────────────────────────────────────────────────────────────
 
+    /// 检查 return 语句: `return` 或 `return v1, v2`。
+    ///
+    /// 验证:
+    ///   - void 函数不能返回值（F2）
+    ///   - 返回值数量与声明匹配（M1/M2）
+    ///   - 各返回值类型与声明类型匹配（M3）
     fn check_return(&mut self, values: &[ast::Expr], span: Range<usize>) -> TypedStmt {
         // F2: void 函数 return 不能带值
         if self.current_func_return.is_void() && !values.is_empty() {
@@ -693,6 +715,10 @@ impl Checker {
 
     // ── If ──────────────────────────────────────────────────────────────────
 
+    /// 检查 if/then/else 语句。
+    ///
+    /// 条件表达式必须为 bool 类型（T3）。then 和 else 分支在各自的作用域中检查，
+    /// 返回类型无约束（Kang 的 if 是语句而非表达式）。
     fn check_if(
         &mut self,
         condition: &ast::Expr,
@@ -725,6 +751,10 @@ impl Checker {
 
     // ── For ─────────────────────────────────────────────────────────────────
 
+    /// 检查 for 循环: `for var v:T = start, condition, step in { body }`。
+    ///
+    /// 循环变量在专用作用域中注册为 LoopVar（S3: 循环结束后不可访问）。
+    /// 结束条件必须是 bool（T4）。循环体内设置 in_loop 标志供 break/continue 检查。
     fn check_for(
         &mut self,
         var_name: &str,
@@ -786,7 +816,7 @@ impl Checker {
 
     // ── 表达式类型推导 ─────────────────────────────────────────────────────
 
-    /// 检查表达式，可选的 expected_type 用于上下文类型推断（如空数组 []）
+    /// 检查表达式，可选的 expected_type 用于上下文类型推断（如空数组 [] 需要从变量声明推断元素类型）。
     pub fn check_expr(&mut self, expr: &ast::Expr, expected_type: Option<KangType>) -> TypedExpr {
         match expr {
             ast::Expr::IntLit(v, ..) => self.typed_lit(TypedExprKind::IntLit(v.clone()), KangType::I32),
@@ -865,7 +895,14 @@ impl Checker {
         }
     }
 
-    // 二元表达式
+    /// 检查二元表达式: 算术、比较、逻辑运算的分发点。
+    ///
+    /// 特殊处理字符串拼接（+ 任一操作数为 str 时自动转字符串拼接）。
+    /// 各运算规则:
+    ///   - &&/||: 操作数须为 bool（T5）
+    ///   - ==/!=: 操作数须同类型（T7/T8）
+    ///   - </<=/>/>=: 操作数须同为 i32 或 f64（T2）
+    ///  算术运算: 操作数须同为 i32 或 f64（T1）
     fn check_binary(
         &mut self,
         left: &ast::Expr,
@@ -993,7 +1030,10 @@ impl Checker {
         }
     }
 
-    /// 窥探表达式的类型（用于 str 拼接判断，避免借用冲突）
+    /// 快速窥探表达式的类型，用于字符串拼接判断。
+    ///
+    /// 仅处理简单字面量和标识符，不递归检查子表达式。对嵌套表达式保守返回非 str 类型。
+    /// 分离此函数是为了避免在 check_binary 中同时借用 self 的不可变和可变引用。
     fn peek_expr_type(&self, expr: &ast::Expr) -> KangType {
         match expr {
             ast::Expr::IntLit(..) => KangType::I32,
@@ -1050,7 +1090,10 @@ impl Checker {
         }
     }
 
-    // 函数调用
+    /// 检查函数调用表达式: `func(args...)` 或 `module.func(args...)`。
+    ///
+    /// 提取函数名，支持直接调用和 module.func 导入调用。特殊处理 len 和 push 内置函数。
+    /// 验证参数数量（F4/F5）和参数类型（F6），返回函数的声明返回值类型。
     fn check_call(&mut self, func: &ast::Expr, args: &[ast::Expr], span: Range<usize>) -> TypedExpr {
         // 提取函数名，支持直接调用和 module.func 导入调用
         // lookup_name: 符号表查找用 (如 m.add)
@@ -1249,7 +1292,10 @@ impl Checker {
         }
     }
 
-    // 索引
+    /// 检查数组/字符串索引表达式: `arr[i]` 或 `s[i]`。
+    ///
+    /// 索引必须是 i32（T9/T10）。数组索引返回元素类型，字符串索引返回 str（T12）。
+    /// 非数组/字符串类型不能索引。
     fn check_index(&mut self, array: &ast::Expr, index: &ast::Expr, span: Range<usize>) -> TypedExpr {
         let arr_typed = self.check_expr(array, None);
         let idx_typed = self.check_expr(index, Some(KangType::I32));
@@ -1283,7 +1329,10 @@ impl Checker {
         }
     }
 
-    // 字段访问
+    /// 检查结构体字段访问: `obj.field`。
+    ///
+    /// obj 必须是结构体类型（ST6），field 必须在结构体中定义（ST7），
+    /// 结构体类型必须先定义（ST5）。
     fn check_field_access(&mut self, obj: &ast::Expr, field: &str, span: Range<usize>) -> TypedExpr {
         let obj_typed = self.check_expr(obj, None);
 
@@ -1336,7 +1385,10 @@ impl Checker {
         }
     }
 
-    // 数组字面量
+    /// 检查数组字面量: `[elem1, elem2, ...]`。
+    ///
+    /// 空数组从期望类型推断元素类型。非空数组要求所有元素类型一致（A2）。
+    /// 数组元素不能是 void（A1）。
     fn check_array_lit(
         &mut self,
         elems: &[ast::Expr],
@@ -1396,7 +1448,10 @@ impl Checker {
         }
     }
 
-    // 结构体字面量
+    /// 检查结构体字面量: `TypeName{field1: val1, field2: val2}`。
+    ///
+    /// 类型必须已定义（ST5）。必须提供所有字段（ST3），不能有多余字段（ST4）。
+    /// 各字段值类型必须与声明匹配（T11）。
     fn check_struct_lit(
         &mut self,
         name: &str,

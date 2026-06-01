@@ -11,10 +11,14 @@ use std::time::Instant;
 
 // ── Token ────────────────────────────────────────────────────────────────────
 
+// ── Token ────────────────────────────────────────────────────────────────────
+
+/// Kang 语言的 token 类型。由 logos 派生宏驱动词法分析。
+/// 关键字优先于同名标识符（logos 按匹配长度 + 优先级选择）。
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t\r\n]+")]
 pub enum TokenKind {
-    // 关键字
+    // ── 关键字 ──────────────────────────────────────────────────────
     #[token("def")]    Def,
     #[token("var")]    Var,
     #[token("return")] Return,
@@ -27,18 +31,18 @@ pub enum TokenKind {
     #[token("import")] Import,
     #[token("from")]   From,
 
-    // 类型关键字
+    // ── 类型关键字 ─────────────────────────────────────────────────
     #[token("i32")]  TI32,
     #[token("f64")]  TF64,
     #[token("str")]  TStr,
     #[token("bool")] TBool,
     #[token("void")] TVoid,
 
-    // 布尔字面量
+    // ── 布尔字面量 ────────────────────────────────────────────────
     #[token("true")]  True,
     #[token("false")] False,
 
-    // 运算符 / 分隔符
+    // ── 运算符 / 分隔符 ─────────────────────────────────────────
     #[token("+")]  Plus,
     #[token("-")]  Minus,
     #[token("*")]  Star,
@@ -66,13 +70,16 @@ pub enum TokenKind {
     #[token(",")] Comma,
     #[token(".")] Dot,
 
-    // 字面量
+    // ── 字面量 ────────────────────────────────────────────────────
+    /// f64 字面量（如 3.14），以字符串保留原始文本
     #[regex(r"[0-9]+\.[0-9]+", |lex| lex.slice().to_string())]
     FloatLit(String),
 
+    /// i32 字面量（如 42），以字符串保留原始文本
     #[regex(r"[0-9]+", |lex| lex.slice().to_string())]
     IntLit(String),
 
+    /// 字符串字面量（如 "hello"），已处理转义序列
     #[regex(r#""([^"\\]|\\.)*""#, parse_string)]
     StrLit(String),
 
@@ -120,17 +127,20 @@ fn parse_string(lex: &mut logos::Lexer<TokenKind>) -> Option<String> {
     Some(result)
 }
 
+/// 单个 token：包含种类、源码位置（行/列）、字节范围
 #[derive(Debug, Clone)]
 pub struct Token {
-    pub kind: TokenKind,
-    pub line: usize,
-    pub col: usize,
-    pub span: Range<usize>,
+    pub kind: TokenKind,           // token 种类
+    pub line: usize,               // 1-based 行号
+    pub col: usize,                // 1-based 列号
+    pub span: Range<usize>, // 在源码中的字节偏移范围
 }
 
 // ── 词法分析入口 ────────────────────────────────────────────────────────────
 
 /// 将源码转为 Token 流，同时收集统计数据
+/// - source: 源码字符串
+/// - stats: 写入耗时、token 数量、各类型计数、注释字节数
 pub fn tokenize(source: &str, stats: &mut LexStats) -> Result<Vec<Token>, LexError> {
     let start = Instant::now();
     let lexer = TokenKind::lexer(source);
@@ -194,6 +204,9 @@ pub fn tokenize(source: &str, stats: &mut LexStats) -> Result<Vec<Token>, LexErr
 
 /// 计算给定字节偏移的行号和列号
 /// offset 必须在 UTF-8 字符边界上；否则自动修正到最近边界
+/// - source: 源码字符串
+/// - offset: 字节偏移
+/// - 返回: (行号, 列号)，均为 1-based
 fn line_col(source: &str, offset: usize) -> (usize, usize) {
     let safe_offset = offset.min(source.len());
     // 防御：确保 offset 落在字符边界（logos 保证此条件永远成立）
@@ -212,6 +225,7 @@ fn line_col(source: &str, offset: usize) -> (usize, usize) {
 // ── Token 序列化 ────────────────────────────────────────────────────────────
 
 /// 按 SPECS 4.1 格式输出 Token Stream
+/// 每行格式: "KIND \"lexeme\" @ line:col"
 pub fn format_tokens(tokens: &[Token]) -> String {
     let mut out = String::new();
     for t in tokens {
@@ -223,7 +237,7 @@ pub fn format_tokens(tokens: &[Token]) -> String {
     out
 }
 
-/// 获取 token 的词素文本
+/// 获取 token 的词素文本（字符串或标识符的原始内容、运算符的符号等）
 fn token_lexeme(t: &Token) -> String {
     match &t.kind {
         TokenKind::Ident(s) => s.clone(),

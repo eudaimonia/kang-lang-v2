@@ -6,26 +6,31 @@ use std::collections::HashMap;
 
 // ── 符号条目 ──────────────────────────────────────────────────────────────────
 
+/// 函数签名，用于函数调用时的类型匹配和重载解析
 #[derive(Debug, Clone)]
 pub struct FuncSignature {
-    pub params: Vec<(String, KangType)>,
-    pub return_type: KangType,
-    pub is_builtin: bool,
-    /// 内置函数重载变体（用户函数此字段为空）
+    pub params: Vec<(String, KangType)>,  // 参数列表 (name, type)
+    pub return_type: KangType,             // 返回类型
+    pub is_builtin: bool,                  // true = 运行时内置函数，false = 用户 def
+    /// 内置函数重载变体（如 str(i32)、str(f64)、str(bool)）。
+    /// 用户函数无重载，此字段为空
     pub overloads: Vec<FuncSignature>,
 }
 
-/// 结构体字段信息
+/// 结构体字段信息，用于字段访问的类型检查和结构体布局计算
 #[derive(Debug, Clone)]
 pub struct StructInfo {
-    pub fields: Vec<(String, KangType)>,
+    pub fields: Vec<(String, KangType)>,  // 字段名列表（保持定义顺序）
 }
 
 /// 符号表中存储的条目
 #[derive(Debug, Clone)]
 pub enum SymbolKind {
+    /// 局部变量或参数，携带类型信息
     Variable(KangType),
+    /// 函数定义（用户或内置），携带完整签名
     Function(FuncSignature),
+    /// 结构体类型，携字段列表
     Struct(StructInfo),
 }
 

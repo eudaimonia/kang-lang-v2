@@ -13,18 +13,19 @@ use std::process;
 
 // ── REPL 状态 ────────────────────────────────────────────────────────────────
 
+/// REPL 内部状态，管理累积定义、输入缓冲和临时编译产物
 struct ReplState {
-    /// 累积的函数和结构体定义（源码文本），每次执行语句/表达式时注入
+    /// 累积的函数和结构体定义（源码文本），每次执行语句/表达式时注入到编译单元中
     defs_source: String,
-    /// 累积的源码行缓冲区（多行续写）
+    /// 累积的源码行缓冲区（多行续写模式用，如未闭合的 if/for/struct 块）
     line_buffer: String,
-    /// 行号计数器
+    /// 行号计数器（仅用于 .stats 元命令显示）
     line_no: usize,
-    /// 是否在继续读取多行输入
+    /// 是否在继续读取多行输入（上次解析返回 is_incomplete=true）
     continuing: bool,
-    /// 临时目录，存放编译产物
+    /// 临时目录，存放每次编译的 .kang 源码、.o 目标文件和可执行文件
     tmp_dir: PathBuf,
-    /// 计数器用于生成唯一文件名
+    /// 计数器用于生成唯一临时文件名（防冲突）
     counter: u64,
 }
 
@@ -62,6 +63,13 @@ impl Drop for ReplState {
 
 // ── REPL 入口 ────────────────────────────────────────────────────────────────
 
+/// REPL 主循环：读取-求值-打印
+/// 1. 显示提示符，读取用户输入
+/// 2. 尝试 lex → parse_line
+/// 3. 若解析成功 → 执行并输出结果
+/// 4. 若输入不完整（is_incomplete）→ 续读模式，提示 ..
+/// 5. 若解析失败 → 报错清空缓冲区
+/// 6. 元命令（.quit/.help/.defs 等）单独处理
 pub fn run_repl() {
     let mut state = ReplState::new();
 
@@ -155,6 +163,8 @@ pub fn run_repl() {
 
 // ── 词法 + 行解析 ────────────────────────────────────────────────────────────
 
+/// 尝试对当前输入进行词法分析和行解析
+/// 返回 LineResult（函数/结构体/语句/表达式/导入）或错误
 fn try_parse(source: &str) -> Result<LineResult, KangError> {
     let mut lex_stats = LexStats::default();
     let tokens = lexer::tokenize(source, &mut lex_stats).map_err(KangError::Lex)?;
@@ -163,6 +173,12 @@ fn try_parse(source: &str) -> Result<LineResult, KangError> {
 
 // ── 行执行 ────────────────────────────────────────────────────────────────────
 
+/// 执行一条解析后的行结果
+/// - FuncDef: 将定义源码追加到 defs_source 累积
+/// - StructDef: 同上
+/// - Stmt: 构建完整程序（defs + 语句），编译运行
+/// - Import: 读取被导入文件，追加到 defs_source
+/// - Expr: 构建完整程序（defs + 表达式求值 + puts(str()) 打印），编译运行
 fn execute_line(state: &mut ReplState, line: LineResult) -> Result<(), KangError> {
     match line {
         LineResult::FuncDef(func) => {
@@ -235,7 +251,9 @@ fn resolve_import_path(path: &str, _current_file: Option<&str>) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// 构建完整的 Kang 程序源码：累积定义 + 入口函数
+/// 构建完整的 Kang 程序源码：累积定义 + main 入口函数
+/// - is_expr=true: 用 puts(str(expr)) 包裹表达式，使结果可见
+/// - is_expr=false: 语句直接嵌入 main 函数体
 fn build_program_source(defs: &str, body: &str, is_expr: bool) -> String {
     let mut source = String::new();
     source.push_str(defs);
@@ -256,6 +274,7 @@ fn build_program_source(defs: &str, body: &str, is_expr: bool) -> String {
 }
 
 /// AOT 编译并执行生成的程序
+/// 步骤: 写临时 .kang 文件 → compile_to_stage(Object) → 链接 kangrt → 执行 → 清理
 fn compile_and_run(state: &mut ReplState, source: &str) -> Result<(), KangError> {
     let id = state.next_id();
     let src_path = state.tmp_dir.join(format!("repl_{}.kang", id));
@@ -320,6 +339,7 @@ enum MetaResult {
     Continue,
 }
 
+/// 处理 .quit / .help / .defs / .clear / .stats 等元命令
 fn handle_meta_command(cmd: &str, state: &mut ReplState) -> Option<MetaResult> {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     match parts[0] {
@@ -366,7 +386,8 @@ fn handle_meta_command(cmd: &str, state: &mut ReplState) -> Option<MetaResult> {
 
 use crate::ast;
 
-/// 判断表达式是否是返回 void 的内置函数调用（puts, print 等）
+/// 判断表达式是否是返回 void 的内置函数调用
+/// 返回 void 时不需要 puts(str(...)) 包装，直接执行即可
 fn is_void_builtin_call(expr: &ast::Expr) -> bool {
     /// 返回 void 的内置函数，调用这些函数时不需要 puts(str(...)) 包装
     const VOID_RETURN_BUILTINS: &[&str] = &["puts", "print", "eprint", "write_file", "append_file", "push"];

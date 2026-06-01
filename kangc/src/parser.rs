@@ -719,8 +719,11 @@ impl<'a> Parser<'a> {
 
 // ── 左值转换 ────────────────────────────────────────────────────────────────
 
-/// 将解析好的表达式转换为左值
-/// 语法层在此检查 LValue 形式合法性(AS3/AS4)，不合法的左值在解析阶段直接拒绝
+/// 将解析好的表达式转换为左值（赋值目标）。
+///
+/// 语法层在此检查 LValue 的形式合法性（AS3/AS4）——只有 Ident、Index、FieldAccess
+/// 三种 Expression 可以转为左值。函数调用、字面量等作为赋值目标时在解析阶段直接拒绝。
+/// 无法在语法层区分的合法性问题（如字符串索引不可赋值 AS1）留给语义层。
 fn expr_to_lvalue(expr: Expr, mark: usize, tokens: &[Token]) -> Result<LValue, ParseError> {
     match expr {
         Expr::Ident(name, ..) => Ok(LValue::Ident(name, tokens[mark].span.clone())),
@@ -741,7 +744,10 @@ fn expr_to_lvalue(expr: Expr, mark: usize, tokens: &[Token]) -> Result<LValue, P
 
 // ── 统计收集 ────────────────────────────────────────────────────────────────
 
-/// 计算 AST 深度
+/// 计算 AST 的最大深度（嵌套层次数），用于统计和嵌套限制验证。
+///
+/// 递归遍历表达式和语句的子树，取各层级的最大值。struct 定义深度固定为 2，
+/// import 深度为 1，函数深度为 2 + 函数体语句的最大深度。
 fn ast_depth(program: &Program) -> usize {
     fn expr_depth(e: &Expr) -> usize {
         match e {
@@ -798,7 +804,10 @@ fn ast_depth(program: &Program) -> usize {
     }).max().unwrap_or(0)
 }
 
-/// 计算各类型 AST 节点数
+/// 按类型统计 AST 节点数量，用于编译器统计输出。
+///
+/// 遍历所有顶层项、函数体中的语句和表达式，统计每种节点类型出现的次数
+/// （如 "func-def": 2, "var-decl": 5, "binary": 3）。
 fn count_nodes(program: &Program) -> HashMap<String, usize> {
     let mut counts = HashMap::new();
     for item in &program.items {
@@ -899,7 +908,10 @@ fn count_expr_nodes(e: &Expr, counts: &mut HashMap<String, usize>) {
 
 // ── 公共入口 ────────────────────────────────────────────────────────────────
 
-/// 将 token 流解析为 AST，同时收集统计数据
+/// 将 token 流解析为完整的 Program AST，同时收集解析统计数据。
+///
+/// 先检查 token 数量是否超过限制（防御超大输入），再创建 Parser 实例进行递归下降解析。
+/// 解析完成后计算 AST 深度和各类型节点数写入统计信息。
 pub fn parse(tokens: &[Token], stats: &mut ParseStats) -> Result<Program, ParseError> {
     if tokens.len() > max_token_count() {
         return Err(ParseError {
@@ -926,7 +938,11 @@ pub fn parse(tokens: &[Token], stats: &mut ParseStats) -> Result<Program, ParseE
 
 // ── REPL 行解析 ───────────────────────────────────────────────────────────────
 
-/// REPL 单行解析结果：声明、语句、或裸表达式
+/// REPL 单行解析结果，区分不同输入类型的处理路径。
+///
+/// - FuncDef/StructDef/Import: 注册到 REPL 的累积定义
+/// - Stmt: 编译并执行（无输出）
+/// - Expr: 求值并用 puts(str()) 打印结果
 #[derive(Debug, Clone)]
 pub enum LineResult {
     FuncDef(FuncDef),
@@ -937,7 +953,10 @@ pub enum LineResult {
     Expr(Expr),
 }
 
-/// 解析单个语句（期望消耗完所有 token）
+/// 解析单个语句，确保消耗所有 token。
+///
+/// 若 token 流中还有未消耗内容（如额外分号或表达式），返回错误。
+/// 用于 REPL 和测试中的增量解析。
 pub fn parse_stmt(tokens: &[Token]) -> Result<Stmt, ParseError> {
     let mut parser = Parser::new(tokens);
     let stmt = parser.parse_stmt()?;
@@ -947,7 +966,9 @@ pub fn parse_stmt(tokens: &[Token]) -> Result<Stmt, ParseError> {
     Ok(stmt)
 }
 
-/// 解析单个表达式（期望消耗完所有 token）
+/// 解析单个表达式，确保消耗所有 token。
+///
+/// 用于 REPL 中的表达式解析和测试。
 pub fn parse_expr(tokens: &[Token]) -> Result<Expr, ParseError> {
     let mut parser = Parser::new(tokens);
     let expr = parser.parse_expr()?;

@@ -19,7 +19,10 @@ fn ok<T>(r: std::result::Result<T, inkwell::builder::BuilderError>) -> Result<T>
     r.map_err(|e| CodeGenError { msg: format!("LLVM builder error: {}", e) })
 }
 
-/// 生成语句的 LLVM IR
+/// 生成语句的 LLVM IR。根据语句类型分发到具体代码生成函数。
+///
+/// 函数返回值类型 func_return 传入 if/for 等复合语句，用于正确终结内部分支
+/// （非 void 函数的所有路径都需要 return）。
 pub fn codegen_stmt<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     stmt: &TypedStmt,
@@ -95,7 +98,11 @@ fn codegen_assign<'ctx>(
     Ok(())
 }
 
-/// 获取左值的指针
+/// 获取左值的内存指针，用于赋值写入。
+///
+/// Ident → 返回变量的 alloca 指针。
+/// Index → 计算 arr[i] 的内存地址（跳过 4 字节长度头，按元素大小偏移）。
+/// FieldAccess → 通过 struct GEP 获取字段指针。
 fn codegen_lvalue_ptr<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     lvalue: &LValue,
@@ -167,8 +174,10 @@ fn codegen_lvalue_ptr<'ctx>(
     }
 }
 
-/// 从 raw Expr (Ident) 解析数组变量的 alloca 指针和类型
-/// 加载数组 struct, 提取 data 指针 (field 0), 返回的是数组堆数据的 i8* 指针
+/// 从 raw AST Expr（当前仅支持 Ident）解析数组变量，返回堆数据指针和 Kang 类型。
+///
+/// 流程: 加载变量的 {ptr, len} 结构体 → 提取 ptr 字段（field 0）→ 返回堆数据的 i8*。
+/// 在赋值 arr[i] = x 的左值指针解析中使用。
 fn resolve_array_ptr<'ctx>(
     ctx: &CodeGenContext<'ctx>,
     array: &crate::ast::Expr,
@@ -191,7 +200,10 @@ fn resolve_array_ptr<'ctx>(
     }
 }
 
-/// 从 raw Expr (Ident) 解析结构体变量的 alloca 指针和类型
+/// 从 raw AST Expr（当前仅支持 Ident）解析结构体变量，返回 alloca 指针和 Kang 类型。
+///
+/// 与 resolve_array_ptr 不同，此函数返回 alloca 指针而非数据指针，
+/// 因为 struct GEP 操作直接作用于结构体变量的 alloca 地址。
 fn resolve_struct_ptr<'ctx>(
     ctx: &CodeGenContext<'ctx>,
     obj: &crate::ast::Expr,
@@ -207,7 +219,11 @@ fn resolve_struct_ptr<'ctx>(
     }
 }
 
-/// 对 raw Expr 做最小编码生成，仅处理 lvalue 中出现的简单表达式
+/// 对 raw AST Expr 做最小编码生成，仅处理 lvalue 中出现的简单表达式。
+///
+/// 赋值语句的左值索引（如 arr[i] = x）中的 i 在语法分析后是 AST Expr，
+/// 未被转换为 TypedExpr。此函数直接处理这些简单的原始表达式（变量引用、整数常量），
+/// 避免对未类型化的 AST 节点调用完整的 codegen_expr。
 fn codegen_expr_raw<'ctx>(
     ctx: &mut CodeGenContext<'ctx>,
     expr: &crate::ast::Expr,

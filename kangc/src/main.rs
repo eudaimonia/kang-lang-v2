@@ -582,7 +582,11 @@ fn macos_deployment_target() -> String {
 
 // ── 多文件编译 (M7) ────────────────────────────────────────────────────────────
 
-/// 收集入口文件的 import 依赖（迭代 BFS，避免深度导入链栈溢出），返回编译顺序的文件列表
+/// 收集入口文件的 import 依赖，返回按编译依赖顺序的文件列表（入口文件先编译）。
+///
+/// 使用 BFS（广度优先搜索）而非递归 DFS，避免深度嵌套的 import 链导致栈溢出。
+/// visited 集合防止重复处理同一文件。只收集直接或间接 import 引用的文件，
+/// 被引用的符号解析由 semantic::Checker 在编译时完成。
 fn collect_imports(entry: &Path) -> Vec<PathBuf> {
     use std::collections::VecDeque;
 
@@ -633,7 +637,9 @@ fn collect_imports(entry: &Path) -> Vec<PathBuf> {
     result
 }
 
-/// 编译所有源文件到 .o 文件，返回 .o 文件路径列表
+/// 编译所有源文件到独立 .o 文件，返回 .o 文件路径列表。
+///
+/// 任一文件编译失败时清理已生成的所有 .o 文件，避免残留中间产物。
 fn compile_all_units(
     files: &[PathBuf],
     target_triple: Option<&str>,

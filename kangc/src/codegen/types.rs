@@ -7,6 +7,11 @@ use inkwell::values::BasicValueEnum;
 use inkwell::AddressSpace;
 
 /// 将 Kang 类型映射为 LLVM 基本类型（void 不可映射，由调用者处理）
+/// - i32/f64/bool → LLVM 标量类型
+/// - Str → {ptr, i32}（指针 + 长度）
+/// - Array → {ptr, i32}（指针 + 长度，首 4 字节存元素个数）
+/// - Struct → LLVM struct type（通过 ctx.struct_types 查找）
+/// - Pair → LLVM struct type（两个字段按顺序排列）
 pub fn kang_type_to_basic<'ctx>(ctx: &CodeGenContext<'ctx>, ty: &KangType) -> BasicTypeEnum<'ctx> {
     match ty {
         KangType::I32 => ctx.context.i32_type().into(),
@@ -87,7 +92,8 @@ fn alignment_of(ctx: &CodeGenContext, ty: &KangType) -> u32 {
 }
 
 /// 获取 Kang 类型对应的 LLVM 存储大小（字节）
-/// 优先使用 LLVM TargetData 获取精确值，回退到手动布局计算
+/// 优先使用 LLVM TargetData 获取精确值（含对齐填充），
+/// 回退到手动布局计算（target machine 不可用时，如仅生成 LLVM IR）
 pub fn size_of(ctx: &CodeGenContext, ty: &KangType) -> u32 {
     // 简单标量类型：直接返回已知大小
     match ty {
@@ -137,7 +143,10 @@ pub fn size_of(ctx: &CodeGenContext, ty: &KangType) -> u32 {
     }
 }
 
-/// 获取 Kang 类型的 LLVM 零值
+/// 获取 Kang 类型的 LLVM 零值（用于初始化 alloca 或默认字面量）
+/// - i32/f64/bool → const_zero
+/// - Str/Array → {null, 0}
+/// - Struct/Pair → const_zero
 pub fn default_value<'ctx>(ctx: &CodeGenContext<'ctx>, ty: &KangType) -> BasicValueEnum<'ctx> {
     match ty {
         KangType::I32 => ctx.context.i32_type().const_zero().into(),

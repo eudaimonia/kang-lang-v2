@@ -75,38 +75,51 @@ impl fmt::Display for KangType {
 #[derive(Debug, Clone)]
 pub struct TypedExpr {
     pub kind: TypedExprKind,
-    pub ty: KangType,
+    pub ty: KangType,    // 表达式求值后的类型（TypedStmt 中的表达式也携带类型）
 }
 
+/// 类型标注后的表达式种类（对应 ast::Expr，但去除了 ReturnType 等非表达式构造）
 #[derive(Debug, Clone)]
 pub enum TypedExprKind {
+    /// i32 字面量，String 保留原始文本（如 "42"），codegen 解析为 LLVM 常量
     IntLit(String),
+    /// f64 字面量，String 保留原始文本
     FloatLit(String),
+    /// 字符串字面量，已处理转义（如 "\n" → 实际换行符）
     StrLit(String),
+    /// 布尔字面量
     BoolLit(bool),
+    /// 标识符引用，指向作用域中已声明的变量或函数
     Ident(String),
+    /// 二元运算（算数/比较/逻辑），左右操作数类型已通过 T5-T8 检查
     Binary {
         left: Box<TypedExpr>,
         op: ast::BinOp,
         right: Box<TypedExpr>,
     },
+    /// 一元运算（取负 Neg / 逻辑非 Not）
     Unary {
         op: ast::UnaryOp,
         expr: Box<TypedExpr>,
     },
+    /// 函数调用，func_name 可能是用户 def 或内置函数
     Call {
         func_name: String,
         args: Vec<TypedExpr>,
     },
+    /// 数组索引 a[i]，返回元素类型（T9: a 必须是数组，i 必须是 i32）
     Index {
         array: Box<TypedExpr>,
         index: Box<TypedExpr>,
     },
+    /// 结构体字段访问 obj.field（ST6: obj 必须是结构体，field 必须存在）
     FieldAccess {
         obj: Box<TypedExpr>,
         field: String,
     },
+    /// 数组字面量 [e1, e2, ...]，所有元素类型一致（A1/A2）
     ArrayLit(Vec<TypedExpr>),
+    /// 结构体字面量 StructType { field1: val1, ... }
     StructLit {
         name: String,
         fields: Vec<(String, TypedExpr)>,
@@ -168,24 +181,31 @@ pub struct TypedStmt {
     pub kind: TypedStmtKind,
 }
 
+/// 类型标注后的语句种类（对应 ast::Stmt）
 #[derive(Debug, Clone)]
 pub enum TypedStmtKind {
+    /// var 声明，bindings 为 (name, type, is_discard) 列表
+    /// is_discard 为 true 时用 _ 忽略绑定值
     VarDecl {
-        bindings: Vec<(String, KangType, bool)>, // (name, type, is_discard)
+        bindings: Vec<(String, KangType, bool)>,
         init: Box<TypedExpr>,
     },
+    /// 赋值语句，lvalue 保持 AST 形式（语义检查验证过可赋值性）
     Assign {
         lvalue: ast::LValue,
         value: Box<TypedExpr>,
     },
+    /// return 语句，values 类型已与函数返回类型匹配（F2/F3）
     Return {
         values: Vec<TypedExpr>,
     },
+    /// if-then-else，condition 必须是 bool（T3）
     If {
         condition: Box<TypedExpr>,
         then_branch: Box<TypedStmt>,
         else_branch: Option<Box<TypedStmt>>,
     },
+    /// for var V:T = start, end, step_expr in body（T4: start/end 类型匹配）
     For {
         var_name: String,
         var_type: KangType,
@@ -195,7 +215,9 @@ pub enum TypedStmtKind {
         step_expr: Box<TypedExpr>,
         body: Box<TypedStmt>,
     },
+    /// 表达式语句（丢弃求值结果）
     Expr(Box<TypedExpr>),
+    /// 语句块，包含多条顺序执行的语句
     Block(Vec<TypedStmt>),
 }
 
@@ -255,20 +277,29 @@ impl fmt::Display for TypedStmt {
 
 // ── TypedTopLevel / TypedProgram ──────────────────────────────────────────────
 
+/// 类型标注后的顶层声明（结构体原样保留，函数变为 TypedFuncDef）
 #[derive(Debug, Clone)]
 pub enum TypedTopLevel {
+    /// 结构体定义，原样保留（结构体类型在符号表中已有记录）
     Struct(ast::StructDef),
+    /// 函数定义，参数和返回值已完成类型解析
     Func(TypedFuncDef),
 }
 
+/// 类型标注后的函数定义
 #[derive(Debug, Clone)]
 pub struct TypedFuncDef {
     pub name: String,
+    /// 参数列表 (name, type)
     pub params: Vec<(String, KangType)>,
+    /// 返回类型（Void / Single / Pair）
     pub return_type: KangType,
+    /// 函数体语句，已完成类型检查
     pub body: Vec<TypedStmt>,
 }
 
+/// 类型标注后的完整程序，作为 codegen 的唯一输入
+/// check() 的产出，codegen::codegen() 的直接输入
 #[derive(Debug, Clone)]
 pub struct TypedProgram {
     pub items: Vec<TypedTopLevel>,

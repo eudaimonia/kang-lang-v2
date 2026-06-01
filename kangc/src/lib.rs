@@ -19,13 +19,14 @@ use stats::{CodeGenResult, CodeGenStats, CompilerStats, LexStats, ParseStats, Se
 // ── 管线阶段 ────────────────────────────────────────────────────────────────
 
 /// 编译管线截断阶段
+/// compile_to_stage 在指定阶段停止并返回中间产物
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PipelineStage {
-    Tokens = 0,
-    Ast = 1,
-    TypedAst = 2,
-    LlvmIr = 3,
-    Object = 4,
+    Tokens = 0,    // 词法分析后停止，输出 Token Stream
+    Ast = 1,       // 语法分析后停止，输出 AST
+    TypedAst = 2,  // 语义分析后停止，输出 TypedProgram
+    LlvmIr = 3,    // LLVM IR 生成后停止，输出 IR 文本
+    Object = 4,    // 生成目标文件后停止，输出 .o 文件路径
 }
 
 impl PipelineStage {
@@ -45,6 +46,12 @@ impl PipelineStage {
 // ── 共享管线 ────────────────────────────────────────────────────────────────
 
 /// 运行编译管线到指定阶段，返回全量统计数据与可选的阶段输出文本
+/// - source: 源码文本
+/// - file_path: 源码路径（用于错误报告和模块名）
+/// - target_triple: 目标平台 triple（None = 宿主平台）
+/// - stage: 终止阶段
+/// - object_path: Object 阶段时输出的 .o 文件路径
+/// - 返回: (CompilerStats, 可选输出文本)
 pub fn compile_to_stage(
     source: &str,
     file_path: &str,
@@ -146,7 +153,8 @@ pub fn codegen(
     codegen::codegen(program, stats, target_triple, object_path, "kang_module")
 }
 
-/// 编译全流程: 源码 → 语义检查后的 TypedProgram + IR
+/// 编译全流程: 源码 → 语义检查后的 TypedProgram + IR + 各阶段统计
+/// 等效于 compile_to_stage(source, file_path, None, LlvmIr, None)
 pub fn compile_full(
     source: &str,
     file_path: &str,
